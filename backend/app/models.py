@@ -5,7 +5,7 @@ from typing import Literal
 
 Suit = Literal["clubs", "diamonds", "hearts", "spades"]
 GameMode = Literal["individual", "teams"]
-GamePhase = Literal["lobby", "drawing", "draw_complete", "bidding", "playing", "round_complete", "finished"]
+GamePhase = Literal["lobby", "drawing", "draw_complete", "cutting", "bidding", "playing", "round_complete", "finished"]
 
 SUIT_SYMBOLS = {
     "clubs": "♣",
@@ -91,10 +91,15 @@ class GameRoom:
     turn_seat: int = 0
     current_trick: list[TrickPlay] = field(default_factory=list)
     completed_tricks: int = 0
+    awaiting_next_trick: bool = False
     round_history: list[RoundSummary] = field(default_factory=list)
     last_trick_winner_id: str | None = None
     last_trick_cards: list[dict] = field(default_factory=list)
     draw_deck: list[Card] = field(default_factory=list)
+    pending_shoe: list[Card] = field(default_factory=list)
+    cutter_player_id: str | None = None
+    dealer_player_id: str | None = None
+    cut_position: int | None = None
     message: str = "Waiting for players"
 
     def player_by_id(self, player_id: str) -> Player:

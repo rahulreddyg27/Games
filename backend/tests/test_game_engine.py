@@ -3,6 +3,7 @@ import random
 from app.game_engine import (
     advance_bots,
     build_shoe,
+    cut_deck,
     determine_trick_winner,
     legal_card_ids,
     score_round,
@@ -40,6 +41,12 @@ def test_configured_one_and_two_deck_shoes_include_one_joker():
     assert len(two_decks) == 105
     assert sum(card.is_joker for card in one_deck) == 1
     assert sum(card.is_joker for card in two_decks) == 1
+
+
+def test_three_deck_shoe_has_157_cards_and_one_joker():
+    shoe = build_shoe(8, random.Random(1), deck_count=3)
+    assert len(shoe) == 157
+    assert sum(card.is_joker for card in shoe) == 1
 
 
 def test_score_made_bid_and_bags():
@@ -121,6 +128,8 @@ def test_computer_bids_and_plays_until_human_turn():
     )
 
     start_game(room, random.Random(4))
+    assert room.cutter_player_id == human.id
+    cut_deck(room, human.id, 7)
     advance_bots(room)
     assert computer.bid is None
     assert room.phase == "bidding"
@@ -146,3 +155,20 @@ def test_pre_game_draw_reorders_players_lowest_to_highest():
     assert [player.id for player in room.players] == ["p1", "p2", "p0", "p3"]
     assert [player.seat for player in room.players] == [0, 1, 2, 3]
     assert len(room.draw_deck) == 48
+
+
+def test_cut_rotates_deck_and_deals_from_designated_first_recipient():
+    players = [Player(id=f"p{i}", name=f"P{i + 1}", seat=i) for i in range(5)]
+    room = GameRoom(code="CUT01", host_player_id="p0", max_players=5, mode="individual", players=players)
+    room.phase = "cutting"
+    room.round_number = 1
+    room.leader_seat = 3
+    room.turn_seat = 3
+    room.dealer_player_id = "p2"
+    room.cutter_player_id = "p1"
+    room.pending_shoe = [card(f"c{i}", "clubs", i + 2) for i in range(10)]
+
+    cut_deck(room, "p1", 2)
+
+    assert room.phase == "bidding"
+    assert [players[index].hand[0].id for index in (3, 4, 0, 1, 2)] == ["c2", "c3", "c4", "c5", "c6"]

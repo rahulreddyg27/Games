@@ -11,6 +11,9 @@ from .game_engine import (
     GameRuleError,
     advance_bots,
     advance_bot_draws,
+    advance_bot_cut,
+    cut_deck,
+    continue_after_trick,
     legal_card_ids,
     next_round,
     play_card,
@@ -45,7 +48,7 @@ class CreateRoomRequest(BaseModel):
     name: str = Field(min_length=1, max_length=24)
     maxPlayers: int = Field(default=4, ge=2, le=8)
     mode: str = Field(default="individual", pattern="^(individual|teams)$")
-    deckCount: int = Field(default=2, ge=1, le=2)
+    deckCount: int = Field(default=2, ge=1, le=3)
 
 
 class JoinRoomRequest(BaseModel):
@@ -65,6 +68,8 @@ def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
             current_player = room.player_by_seat(room.turn_seat).id
         except KeyError:
             current_player = None
+    elif room.phase == "cutting":
+        current_player = room.cutter_player_id
 
     players = []
     for p in sorted(room.players, key=lambda item: item.seat):
@@ -112,6 +117,7 @@ def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
         "mode": room.mode,
         "phase": room.phase,
         "roundNumber": room.round_number,
+        "leaderSeat": room.leader_seat,
         "message": room.message,
         "players": players,
         "currentPlayerId": current_player,
@@ -121,7 +127,12 @@ def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
         "lastTrickWinnerId": room.last_trick_winner_id,
         "lastTrickCards": room.last_trick_cards,
         "drawChoices": [card.id for card in room.draw_deck] if room.phase == "drawing" else [],
+        "cutCardCount": len(room.pending_shoe) if room.phase == "cutting" else 0,
+        "cutterPlayerId": room.cutter_player_id,
+        "dealerPlayerId": room.dealer_player_id,
+        "cutPosition": room.cut_position,
         "completedTricks": room.completed_tricks,
+        "awaitingNextTrick": room.awaiting_next_trick,
         "hand": hand,
         "legalCardIds": legal,
         "roundHistory": [
@@ -154,7 +165,14 @@ def health() -> dict:
 
 @app.post("/rooms")
 async def create_room(body: CreateRoomRequest) -> dict:
-    deck_count = 2 if body.maxPlayers >= 5 else body.deckCount
+    if body.mode == "teams" and (body.maxPlayers < 4 or body.maxPlayers % 2 != 0):
+        raise HTTPException(status_code=400, detail="Team mode requires an even player count of 4, 6, or 8")
+    if body.maxPlayers >= 8:
+        deck_count = 3
+    elif body.maxPlayers >= 4:
+        deck_count = 2
+    else:
+        deck_count = min(body.deckCount, 2)
     room, player = store.create_room(body.name, body.maxPlayers, body.mode, deck_count)
     return {"roomCode": room.code, "playerId": player.id, "rejoinPin": player.rejoin_pin, "state": serialize_room(room, player.id)}
 
@@ -238,6 +256,10 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
                     if player_id != room.host_player_id:
                         raise GameRuleError("Only the host can confirm the player order")
                     start_game(room)
+                    advance_bot_cut(room)
+                    advance_bots(room)
+                elif action == "cut_deck":
+                    cut_deck(room, player_id, int(payload.get("position")))
                     advance_bots(room)
                 elif action == "submit_bid":
                     submit_bid(room, player_id, int(payload.get("bid")))
@@ -247,10 +269,14 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
                     advance_bots(room)
                     if room.phase == "finished":
                         save_completed_game(room.code, serialize_room(room, None))
+                elif action == "continue_trick":
+                    continue_after_trick(room)
+                    advance_bots(room)
                 elif action == "next_round":
                     if player_id != room.host_player_id:
                         raise GameRuleError("Only the host can start the next round")
                     next_round(room)
+                    advance_bot_cut(room)
                     advance_bots(room)
                 elif action == "ping":
                     await websocket.send_json({"type": "pong"})

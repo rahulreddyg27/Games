@@ -7,9 +7,12 @@ A local-first multiplayer implementation of the custom Spades game described in 
 - 2–8 players, with computer players filling empty seats when the host starts.
 - 13 rounds.
 - Round 1 deals 1 card/player, Round 2 deals 2, ... Round 13 deals 13.
-- Games use 2 standard decks + 1 Joker by default.
-- Rooms with 2–4 players can choose 1 deck (53 cards including Joker) or 2 decks (105 cards including Joker).
-- Rooms with 5–8 players always use 2 decks + 1 Joker.
+- Rooms with 2–3 players can choose 1 deck (53 cards including Joker) or 2 decks (105 cards including Joker).
+- Rooms with 4–7 players always use 2 decks + 1 Joker.
+- Rooms with 8 players always use 3 decks + 1 Joker (157 cards).
+- Before every round, the designated cutter cuts the shuffled shoe before the dealer deals.
+- Up to 105 cut positions appear as facedown cards; positions above 105 appear in a dropdown.
+- Cards are dealt one at a time beginning with that round's rotating first recipient.
 - Exactly **one Joker** is added to the shoe.
 - Before Round 1, each player picks one unique facedown card from a separate 52-card deck (no Joker).
 - Drawn cards are ranked highest to lowest by rank; suit is considered only for equal ranks, using ♠, ♥, ♦, ♣ from highest to lowest.
@@ -142,6 +145,7 @@ Included:
 - Automatic card dealing by round.
 - Hidden bidding until everyone bids.
 - Server-authoritative card validation.
+- Player-controlled deck cutting before every round.
 - Follow-suit validation.
 - Spade trump logic.
 - Wild Joker logic.
@@ -166,6 +170,8 @@ Not yet included (good next phase):
 - Native App Store app/PWA install flow.
 - Timers/AFK handling.
 - Production-grade distributed game-state storage.
+- Round 13 strategy suggestions (tracked in `TODO.md`).
+- Combined team bidding (tracked in `TODO.md`; final captain/visibility rules pending).
 
 ## Important design choice
 

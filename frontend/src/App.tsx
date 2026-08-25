@@ -139,12 +139,18 @@ function Home({
   const [deckCount, setDeckCount] = useState(2)
   const [mode, setMode] = useState<'individual' | 'teams'>('individual')
   const [busy, setBusy] = useState(false)
+  const teamEligible = maxPlayers >= 4 && maxPlayers % 2 === 0
+
+  useEffect(() => {
+    if (!teamEligible && mode === 'teams') setMode('individual')
+  }, [teamEligible, mode])
 
   const create = async () => {
     if (!createName.trim()) return setError('Enter your name')
     setBusy(true)
     try {
-      const result = await createRoom(createName.trim(), maxPlayers, mode, maxPlayers >= 5 ? 2 : deckCount)
+      const requiredDecks = maxPlayers >= 8 ? 3 : maxPlayers >= 4 ? 2 : deckCount
+      const result = await createRoom(createName.trim(), maxPlayers, mode, requiredDecks)
       onEnter(result.roomCode, result.playerId, result.rejoinPin, result.state)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create room')
@@ -215,14 +221,18 @@ function Home({
           </label>
           <label>
             Card decks
-            {maxPlayers <= 4 ? (
+            {maxPlayers <= 3 ? (
               <select value={deckCount} onChange={(e) => setDeckCount(Number(e.target.value))}>
                 <option value={1}>1 deck + Joker (53 cards)</option>
                 <option value={2}>2 decks + Joker (105 cards)</option>
               </select>
-            ) : (
+            ) : maxPlayers <= 7 ? (
               <select value={2} disabled>
                 <option value={2}>2 decks + Joker (required)</option>
+              </select>
+            ) : (
+              <select value={3} disabled>
+                <option value={3}>3 decks + Joker (required)</option>
               </select>
             )}
           </label>
@@ -230,7 +240,7 @@ function Home({
             Score mode
             <select value={mode} onChange={(e) => setMode(e.target.value as 'individual' | 'teams')}>
               <option value="individual">Individual</option>
-              <option value="teams">2 Teams</option>
+              <option value="teams" disabled={!teamEligible}>2 Teams (4, 6, or 8 players)</option>
             </select>
           </label>
           <button className="primary" onClick={create} disabled={busy}>Create Game</button>
@@ -344,11 +354,13 @@ function Game({
         <CardDraw state={state} playerId={playerId} send={send} />
       ) : state.phase === 'draw_complete' ? (
         <DrawResults state={state} isHost={isHost} send={send} />
+      ) : state.phase === 'cutting' ? (
+        <DeckCut state={state} playerId={playerId} send={send} />
       ) : (
         <>
           <section className="table-layout">
             <PlayerRail state={state} playerId={playerId} />
-            <GameTable state={state} playerId={playerId} />
+            <GameTable state={state} playerId={playerId} send={send} />
           </section>
 
           {state.phase === 'bidding' && (
@@ -422,6 +434,42 @@ function DrawResults({ state, isHost, send }: { state: RoomState; isHost: boolea
   )
 }
 
+function DeckCut({ state, playerId, send }: { state: RoomState; playerId: string; send: (p: Record<string, unknown>) => void }) {
+  const [extraPosition, setExtraPosition] = useState(106)
+  const cutter = state.players.find((player) => player.id === state.cutterPlayerId)
+  const dealer = state.players.find((player) => player.id === state.dealerPlayerId)
+  const firstRecipient = state.players.find((player) => player.seat === state.leaderSeat)
+  const isCutter = state.cutterPlayerId === playerId
+  const visibleCount = Math.min(state.cutCardCount, 105)
+  const extraPositions = Array.from({ length: Math.max(0, state.cutCardCount - 105) }, (_, index) => index + 106)
+
+  return (
+    <section className="draw-panel cut-panel">
+      <p className="eyebrow">ROUND {state.roundNumber} · CUT THE DECK</p>
+      <h2>{isCutter ? 'Choose where to cut' : `Waiting for ${cutter?.name ?? 'the cutter'}`}</h2>
+      <p>{dealer?.name ?? 'The dealer'} deals first to {firstRecipient?.name ?? 'the first player'}. Cutting after a card moves that card and every card before it to the bottom.</p>
+      <div className="cut-summary"><strong>{state.cutCardCount} cards</strong><span>Cutter: {cutter?.name}</span><span>Dealer: {dealer?.name}</span></div>
+      <div className="draw-grid cut-grid">
+        {Array.from({ length: visibleCount }, (_, index) => index + 1).map((position) => (
+          <button key={position} className="draw-card" disabled={!isCutter} onClick={() => send({ action: 'cut_deck', position })}>
+            <span>♠</span><small>{position}</small>
+          </button>
+        ))}
+      </div>
+      {extraPositions.length > 0 && (
+        <div className="extra-cut">
+          <label>Additional positions 106–{state.cutCardCount}
+            <select value={extraPosition} onChange={(event) => setExtraPosition(Number(event.target.value))} disabled={!isCutter}>
+              {extraPositions.map((position) => <option key={position} value={position}>{position}</option>)}
+            </select>
+          </label>
+          <button className="primary" disabled={!isCutter} onClick={() => send({ action: 'cut_deck', position: extraPosition })}>Cut at {extraPosition}</button>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function Lobby({ state, isHost, send }: { state: RoomState; isHost: boolean; send: (p: Record<string, unknown>) => void }) {
   return (
     <section className="lobby-card">
@@ -470,7 +518,7 @@ function PlayerRail({ state, playerId }: { state: RoomState; playerId: string })
   )
 }
 
-function GameTable({ state, playerId }: { state: RoomState; playerId: string }) {
+function GameTable({ state, playerId, send }: { state: RoomState; playerId: string; send: (p: Record<string, unknown>) => void }) {
   const playerName = (id: string) => state.players.find((p) => p.id === id)?.name ?? 'Player'
   const displayedTrick = state.currentTrick.length > 0 ? state.currentTrick : state.lastTrickCards
   const showingLastTrick = state.currentTrick.length === 0 && state.lastTrickCards.length > 0
@@ -494,7 +542,10 @@ function GameTable({ state, playerId }: { state: RoomState; playerId: string }) 
         ))}
       </div>
       {showingLastTrick && state.lastTrickWinnerId && state.phase === 'playing' && (
-        <p className="last-winner">Completed trick: {playerName(state.lastTrickWinnerId)} won · Cards remain visible until the next lead</p>
+        <div className="trick-review">
+          <p className="last-winner">Completed trick: {playerName(state.lastTrickWinnerId)} won</p>
+          {state.awaitingNextTrick && <button className="primary" onClick={() => send({ action: 'continue_trick' })}>Continue to next trick</button>}
+        </div>
       )}
     </section>
   )

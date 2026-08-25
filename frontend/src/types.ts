@@ -49,8 +49,9 @@ export type RoomState = {
   maxPlayers: number
   deckCount: number
   mode: 'individual' | 'teams'
-  phase: 'lobby' | 'drawing' | 'draw_complete' | 'bidding' | 'playing' | 'round_complete' | 'finished'
+  phase: 'lobby' | 'drawing' | 'draw_complete' | 'cutting' | 'bidding' | 'playing' | 'round_complete' | 'finished'
   roundNumber: number
+  leaderSeat: number
   message: string
   players: PlayerState[]
   currentPlayerId: string | null
@@ -58,7 +59,12 @@ export type RoomState = {
   lastTrickWinnerId: string | null
   lastTrickCards: { playerId: string; card: Card }[]
   drawChoices: string[]
+  cutCardCount: number
+  cutterPlayerId: string | null
+  dealerPlayerId: string | null
+  cutPosition: number | null
   completedTricks: number
+  awaitingNextTrick: boolean
   hand: Card[]
   legalCardIds: string[]
   roundHistory: { roundNumber: number; rows: RoundRow[] }[]

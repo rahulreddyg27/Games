@@ -131,7 +131,7 @@ def advance_bots(room: GameRoom) -> None:
             break
         submit_bid(room, player.id, bot_bid(room, player.id))
 
-    while room.phase == "playing":
+    while room.phase == "playing" and not room.awaiting_next_trick:
         player = room.player_by_seat(room.turn_seat)
         if not player.is_bot:
             break
@@ -142,9 +142,10 @@ def start_round(room: GameRoom, round_number: int, rng: random.Random | None = N
     if round_number < 1 or round_number > 13:
         raise GameRuleError("Round must be between 1 and 13")
     room.round_number = round_number
-    room.phase = "bidding"
+    room.phase = "cutting"
     room.current_trick = []
     room.completed_tricks = 0
+    room.awaiting_next_trick = False
     room.last_trick_winner_id = None
     room.last_trick_cards = []
 
@@ -158,21 +159,62 @@ def start_round(room: GameRoom, round_number: int, rng: random.Random | None = N
         player.bid = None
         player.tricks = 0
 
-    # Rotating lead: Round 1 starts with seat 0, then rotates each round.
+    # Rotating first recipient/lead: Round 1 starts with seat 0, then rotates.
     room.leader_seat = (round_number - 1) % len(room.players)
     room.turn_seat = room.leader_seat
 
+    dealer_seat = (room.leader_seat - 1) % len(room.players)
+    cutter_seat = (dealer_seat - 1) % len(room.players)
+    room.dealer_player_id = room.player_by_seat(dealer_seat).id
+    room.cutter_player_id = room.player_by_seat(cutter_seat).id
+    room.cut_position = None
+    room.pending_shoe = shoe
+    room.message = f"{room.player_by_seat(cutter_seat).name} cuts the deck; {room.player_by_seat(dealer_seat).name} deals"
+
+
+def cut_deck(room: GameRoom, player_id: str, position: int) -> None:
+    if room.phase != "cutting":
+        raise GameRuleError("The deck is not waiting to be cut")
+    if player_id != room.cutter_player_id:
+        raise GameRuleError("Only the designated cutter can cut the deck")
+    if position < 1 or position > len(room.pending_shoe):
+        raise GameRuleError(f"Cut position must be between 1 and {len(room.pending_shoe)}")
+
+    room.pending_shoe = room.pending_shoe[position:] + room.pending_shoe[:position]
+    room.cut_position = position
+    deal_pending_shoe(room)
+
+
+def deal_pending_shoe(room: GameRoom) -> None:
+    shoe = room.pending_shoe
+    needed = len(room.players) * room.round_number
+    deal_order = [
+        room.player_by_seat((room.leader_seat + offset) % len(room.players))
+        for offset in range(len(room.players))
+    ]
+
     # Deal one card at a time, preserving random shoe order.
     cursor = 0
-    for _ in range(round_number):
-        for player in sorted(room.players, key=lambda p: p.seat):
+    for _ in range(room.round_number):
+        for player in deal_order:
             player.hand.append(shoe[cursor])
             cursor += 1
 
     for player in room.players:
         player.hand.sort(key=card_sort_key)
 
-    room.message = f"Round {round_number}: submit your Guess"
+    room.pending_shoe = []
+    room.phase = "bidding"
+    room.turn_seat = room.leader_seat
+    room.message = f"Round {room.round_number}: submit your Guess"
+
+
+def advance_bot_cut(room: GameRoom) -> None:
+    if room.phase != "cutting" or room.cutter_player_id is None:
+        return
+    cutter = room.player_by_id(room.cutter_player_id)
+    if cutter.is_bot:
+        cut_deck(room, cutter.id, random.randint(1, len(room.pending_shoe)))
 
 
 def submit_bid(room: GameRoom, player_id: str, bid: int) -> None:
@@ -218,7 +260,7 @@ def led_suit(room: GameRoom) -> str | None:
 
 def legal_card_ids(room: GameRoom, player_id: str) -> set[str]:
     player = room.player_by_id(player_id)
-    if room.phase != "playing" or player.seat != room.turn_seat:
+    if room.phase != "playing" or room.awaiting_next_trick or player.seat != room.turn_seat:
         return set()
 
     required = led_suit(room)
@@ -236,6 +278,8 @@ def legal_card_ids(room: GameRoom, player_id: str) -> set[str]:
 def play_card(room: GameRoom, player_id: str, card_id: str) -> dict | None:
     if room.phase != "playing":
         raise GameRuleError("Cards cannot be played right now")
+    if room.awaiting_next_trick:
+        raise GameRuleError("Review the completed trick before continuing")
     player = room.player_by_id(player_id)
     if player.seat != room.turn_seat:
         raise GameRuleError("It is not your turn")
@@ -270,8 +314,16 @@ def play_card(room: GameRoom, player_id: str, card_id: str) -> dict | None:
 
     room.leader_seat = winner.seat
     room.turn_seat = winner.seat
-    room.message = f"{winner.name} won the trick and leads next"
+    room.awaiting_next_trick = True
+    room.message = f"{winner.name} won the trick. Review the cards, then continue."
     return {"trickWinnerId": winner_id}
+
+
+def continue_after_trick(room: GameRoom) -> None:
+    if room.phase != "playing" or not room.awaiting_next_trick:
+        raise GameRuleError("There is no completed trick waiting to continue")
+    room.awaiting_next_trick = False
+    room.message = f"{room.player_by_seat(room.turn_seat).name} leads the next trick"
 
 
 def determine_trick_winner(plays: list[TrickPlay]) -> str:
