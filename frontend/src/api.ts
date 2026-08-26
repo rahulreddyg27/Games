@@ -1,16 +1,16 @@
 import type { RoomState, Session } from './types'
 
-const localProtocol = window.location.protocol === 'https:' ? 'https' : 'http'
-const localWsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-const localHost = window.location.hostname || 'localhost'
+const isLocal =
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1'
 
-export const API_BASE =
-  import.meta.env.VITE_API_BASE ||
-  `${localProtocol}://${localHost}:8000`
+export const API_BASE = isLocal
+  ? 'http://localhost:8000'
+  : 'https://card-game-api.purplecoast-1e73a5fa.westus2.azurecontainerapps.io'
 
-export const WS_BASE =
-  import.meta.env.VITE_WS_BASE ||
-  `${localWsProtocol}://${localHost}:8000`
+export const WS_BASE = isLocal
+  ? 'ws://localhost:8000'
+  : 'wss://card-game-api.purplecoast-1e73a5fa.westus2.azurecontainerapps.io'
 
 async function json<T>(response: Response): Promise<T> {
   const body = await response.json()
