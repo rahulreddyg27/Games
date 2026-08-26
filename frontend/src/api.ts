@@ -1,10 +1,16 @@
 import type { RoomState, Session } from './types'
 
-const protocol = window.location.protocol === 'https:' ? 'https' : 'http'
-const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-const host = window.location.hostname || 'localhost'
-export const API_BASE = `${protocol}://${host}:8000`
-export const WS_BASE = `${wsProtocol}://${host}:8000`
+const localProtocol = window.location.protocol === 'https:' ? 'https' : 'http'
+const localWsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+const localHost = window.location.hostname || 'localhost'
+
+export const API_BASE =
+  import.meta.env.VITE_API_BASE ||
+  `${localProtocol}://${localHost}:8000`
+
+export const WS_BASE =
+  import.meta.env.VITE_WS_BASE ||
+  `${localWsProtocol}://${localHost}:8000`
 
 async function json<T>(response: Response): Promise<T> {
   const body = await response.json()
