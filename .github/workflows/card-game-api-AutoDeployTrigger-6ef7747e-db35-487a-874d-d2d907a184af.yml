@@ -34,16 +34,13 @@ jobs:
       - name: Build and push container image to registry
         uses: azure/container-apps-deploy-action@v2
         with:
-          appSourcePath: ${{ github.workspace }}backend
-          _dockerfilePathKey_: _dockerfilePath_
-          _targetLabelKey_: _targetLabel_
+          appSourcePath: ${{ github.workspace }}
+          dockerfilePath: backend/Dockerfile
           registryUrl: cardgameacrrahul27.azurecr.io
           registryUsername: ${{ secrets.CARDGAMEAPI_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.CARDGAMEAPI_REGISTRY_PASSWORD }}
           containerAppName: card-game-api
           resourceGroup: Card-game-dev-rg
           imageToBuild: cardgameacrrahul27.azurecr.io/card-game-api:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
 
 
