@@ -49,6 +49,12 @@ def test_three_deck_shoe_has_157_cards_and_one_joker():
     assert sum(card.is_joker for card in shoe) == 1
 
 
+def test_four_deck_shoe_supports_sixteen_players():
+    shoe = build_shoe(16, random.Random(1), deck_count=4)
+    assert len(shoe) == 209
+    assert sum(card.is_joker for card in shoe) == 1
+
+
 def test_score_made_bid_and_bags():
     assert score_round(3, 5) == (32, 2)
 

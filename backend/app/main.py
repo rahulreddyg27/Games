@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import secrets
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -24,8 +25,16 @@ from .game_engine import (
     team_totals,
 )
 from .models import GameRoom
-from .persistence import delete_completed_game, init_db, save_completed_game
+from .persistence import (
+    delete_all_completed_games,
+    delete_completed_game,
+    init_db,
+    list_completed_games,
+    save_completed_game,
+)
 from .store import store
+
+ADMIN_KEY = "Qwerty@123"
 
 
 @asynccontextmanager
@@ -46,9 +55,9 @@ app.add_middleware(
 
 class CreateRoomRequest(BaseModel):
     name: str = Field(min_length=1, max_length=24)
-    maxPlayers: int = Field(default=4, ge=2, le=8)
+    maxPlayers: int = Field(default=4, ge=2, le=16)
     mode: str = Field(default="individual", pattern="^(individual|teams)$")
-    deckCount: int = Field(default=2, ge=1, le=3)
+    deckCount: int = Field(default=2, ge=1, le=4)
 
 
 class JoinRoomRequest(BaseModel):
@@ -59,6 +68,33 @@ class JoinRoomRequest(BaseModel):
 class CloseRoomRequest(BaseModel):
     name: str = Field(min_length=1, max_length=24)
     rejoinPin: str = Field(pattern="^[0-9]{6}$")
+
+
+class AdminRequest(BaseModel):
+    adminKey: str = Field(min_length=1, max_length=256)
+
+
+class AdminCleanupRequest(AdminRequest):
+    scope: str = Field(pattern="^(active|completed|all)$")
+
+
+def verify_admin(admin_key: str) -> None:
+    if not secrets.compare_digest(admin_key, ADMIN_KEY):
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+
+async def remove_active_room(code: str, reason: str) -> bool:
+    code = code.upper()
+    if code not in store.rooms:
+        return False
+    for websocket in list(store.connections[code].values()):
+        try:
+            await websocket.close(code=4400, reason=reason)
+        except Exception:
+            pass
+    store.connections.pop(code, None)
+    store.rooms.pop(code, None)
+    return True
 
 
 def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
@@ -166,8 +202,10 @@ def health() -> dict:
 @app.post("/rooms")
 async def create_room(body: CreateRoomRequest) -> dict:
     if body.mode == "teams" and (body.maxPlayers < 4 or body.maxPlayers % 2 != 0):
-        raise HTTPException(status_code=400, detail="Team mode requires an even player count of 4, 6, or 8")
-    if body.maxPlayers >= 8:
+        raise HTTPException(status_code=400, detail="Team mode requires an even player count from 4 through 16")
+    if body.maxPlayers >= 13:
+        deck_count = 4
+    elif body.maxPlayers >= 8:
         deck_count = 3
     elif body.maxPlayers >= 4:
         deck_count = 2
@@ -204,6 +242,70 @@ async def close_room(code: str, body: CloseRoomRequest) -> dict:
     store.rooms.pop(code, None)
     delete_completed_game(code)
     return {"closed": True}
+
+
+@app.post("/admin/games")
+def admin_list_games(body: AdminRequest) -> dict:
+    verify_admin(body.adminKey)
+    completed = {game["code"]: game for game in list_completed_games()}
+    games = []
+    for room in store.rooms.values():
+        host = room.player_by_id(room.host_player_id)
+        if room.phase == "finished":
+            status = "completed"
+        elif room.phase == "lobby":
+            status = "open"
+        else:
+            status = "in_progress"
+        stored = completed.pop(room.code, None)
+        games.append(
+            {
+                "code": room.code,
+                "status": status,
+                "hostName": host.name,
+                "playerCount": len([player for player in room.players if not player.is_bot]),
+                "botCount": len([player for player in room.players if player.is_bot]),
+                "connectedCount": len([player for player in room.players if player.connected and not player.is_bot]),
+                "roundNumber": room.round_number,
+                "finishedAt": stored.get("finishedAt") if stored else None,
+                "storage": "memory + sqlite" if stored else "memory",
+            }
+        )
+    games.extend(completed.values())
+    status_order = {"in_progress": 0, "open": 1, "completed": 2}
+    games.sort(key=lambda game: (status_order.get(game["status"], 9), game["code"]))
+    return {"games": games}
+
+
+@app.delete("/admin/games/{code}")
+async def admin_delete_game(code: str, body: AdminRequest) -> dict:
+    verify_admin(body.adminKey)
+    code = code.upper()
+    removed_active = await remove_active_room(code, "Game closed by administrator")
+    completed_codes = {game["code"] for game in list_completed_games()}
+    removed_completed = code in completed_codes
+    delete_completed_game(code)
+    if not removed_active and not removed_completed:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return {"closed": True}
+
+
+@app.post("/admin/games/cleanup")
+async def admin_cleanup_games(body: AdminCleanupRequest) -> dict:
+    verify_admin(body.adminKey)
+    active_count = 0
+    completed_count = 0
+    if body.scope in ("active", "all"):
+        for code in list(store.rooms):
+            if await remove_active_room(code, "Games cleaned up by administrator"):
+                active_count += 1
+    elif body.scope == "completed":
+        for code, room in list(store.rooms.items()):
+            if room.phase == "finished" and await remove_active_room(code, "Completed games cleaned up by administrator"):
+                active_count += 1
+    if body.scope in ("completed", "all"):
+        completed_count = delete_all_completed_games()
+    return {"activeClosed": active_count, "completedDeleted": completed_count}
 
 
 @app.get("/rooms/{code}/players/{player_id}")

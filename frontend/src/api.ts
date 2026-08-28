@@ -50,6 +50,48 @@ export async function closeRoom(code: string, name: string, rejoinPin: string) {
   )
 }
 
+export type AdminGame = {
+  code: string
+  status: 'open' | 'in_progress' | 'completed'
+  hostName: string
+  playerCount: number
+  botCount: number
+  connectedCount?: number
+  roundNumber: number
+  finishedAt: string | null
+  storage: string
+}
+
+export async function adminListGames(adminKey: string) {
+  return json<{ games: AdminGame[] }>(
+    await fetch(`${API_BASE}/admin/games`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminKey }),
+    }),
+  )
+}
+
+export async function adminDeleteGame(code: string, adminKey: string) {
+  return json<{ closed: boolean }>(
+    await fetch(`${API_BASE}/admin/games/${encodeURIComponent(code)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminKey }),
+    }),
+  )
+}
+
+export async function adminCleanupGames(adminKey: string, scope: 'active' | 'completed' | 'all') {
+  return json<{ activeClosed: number; completedDeleted: number }>(
+    await fetch(`${API_BASE}/admin/games/cleanup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminKey, scope }),
+    }),
+  )
+}
+
 export async function resumeRoom(session: Session) {
   return json<{ state: RoomState }>(
     await fetch(`${API_BASE}/rooms/${session.roomCode}/players/${session.playerId}`),

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, LogOut, Play, RotateCcw, Trash2, Users, Wifi, WifiOff } from 'lucide-react'
-import { closeRoom, createRoom, joinRoom, resumeRoom, WS_BASE } from './api'
+import { ArrowLeft, Copy, LogOut, Play, RefreshCw, RotateCcw, Search, ShieldCheck, Trash2, Users, Wifi, WifiOff } from 'lucide-react'
+import { adminCleanupGames, adminDeleteGame, adminListGames, closeRoom, createRoom, joinRoom, resumeRoom, WS_BASE } from './api'
+import type { AdminGame } from './api'
 import type { Card, RoomState, Session } from './types'
 
 const SESSION_KEY = 'friends-spades-session'
@@ -139,6 +140,7 @@ function Home({
   const [deckCount, setDeckCount] = useState(2)
   const [mode, setMode] = useState<'individual' | 'teams'>('individual')
   const [busy, setBusy] = useState(false)
+  const [showAdmin, setShowAdmin] = useState(false)
   const teamEligible = maxPlayers >= 4 && maxPlayers % 2 === 0
 
   useEffect(() => {
@@ -149,7 +151,7 @@ function Home({
     if (!createName.trim()) return setError('Enter your name')
     setBusy(true)
     try {
-      const requiredDecks = maxPlayers >= 8 ? 3 : maxPlayers >= 4 ? 2 : deckCount
+      const requiredDecks = maxPlayers >= 13 ? 4 : maxPlayers >= 8 ? 3 : maxPlayers >= 4 ? 2 : deckCount
       const result = await createRoom(createName.trim(), maxPlayers, mode, requiredDecks)
       onEnter(result.roomCode, result.playerId, result.rejoinPin, result.state)
     } catch (e) {
@@ -201,10 +203,12 @@ function Home({
             13 rounds · wild Joker · 5 bags = −50 · live multiplayer
           </p>
         </div>
+        <button className="admin-nav" onClick={() => setShowAdmin((value) => !value)}>{showAdmin ? <ArrowLeft size={17} /> : <ShieldCheck size={17} />}{showAdmin ? 'Back to games' : 'Admin'}</button>
       </section>
 
       {error && <div className="error-banner">{error}</div>}
 
+      {showAdmin ? <AdminPanel /> : <>
       <section className="home-grid">
         <div className="panel">
           <p className="panel-kicker">HOST</p>
@@ -216,7 +220,7 @@ function Home({
           <label>
             Players
             <select value={maxPlayers} onChange={(e) => setMaxPlayers(Number(e.target.value))}>
-              {[2, 3, 4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{n} players</option>)}
+              {Array.from({ length: 15 }, (_, index) => index + 2).map((n) => <option key={n} value={n}>{n} players</option>)}
             </select>
           </label>
           <label>
@@ -230,9 +234,13 @@ function Home({
               <select value={2} disabled>
                 <option value={2}>2 decks + Joker (required)</option>
               </select>
-            ) : (
+            ) : maxPlayers <= 12 ? (
               <select value={3} disabled>
                 <option value={3}>3 decks + Joker (required)</option>
+              </select>
+            ) : (
+              <select value={4} disabled>
+                <option value={4}>4 decks + Joker (required)</option>
               </select>
             )}
           </label>
@@ -240,7 +248,7 @@ function Home({
             Score mode
             <select value={mode} onChange={(e) => setMode(e.target.value as 'individual' | 'teams')}>
               <option value="individual">Individual</option>
-              <option value="teams" disabled={!teamEligible}>2 Teams (4, 6, or 8 players)</option>
+              <option value="teams" disabled={!teamEligible}>2 Teams (even counts from 4–16)</option>
             </select>
           </label>
           <button className="primary" onClick={create} disabled={busy}>Create Game</button>
@@ -278,7 +286,75 @@ function Home({
         <div><strong>♠ Trump</strong><span>Follow suit; spades trump when void.</span></div>
         <div><strong>5 Bags</strong><span>Automatic −50 penalty.</span></div>
       </section>
+      </>}
     </main>
+  )
+}
+
+function AdminPanel() {
+  const [adminKey, setAdminKey] = useState('')
+  const [games, setGames] = useState<AdminGame[]>([])
+  const [query, setQuery] = useState('')
+  const [status, setStatus] = useState<'all' | AdminGame['status']>('all')
+  const [message, setMessage] = useState('Enter the backend admin key to load stored games.')
+  const [busy, setBusy] = useState(false)
+
+  const loadGames = async () => {
+    if (!adminKey) return setMessage('Enter the admin key.')
+    setBusy(true)
+    try {
+      const result = await adminListGames(adminKey)
+      setGames(result.games)
+      setMessage(`${result.games.length} game${result.games.length === 1 ? '' : 's'} found.`)
+    } catch (error) {
+      setGames([])
+      setMessage(error instanceof Error ? error.message : 'Could not load games')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const deleteGame = async (game: AdminGame) => {
+    if (!window.confirm(`Close and delete game ${game.code}? Connected players will be removed.`)) return
+    setBusy(true)
+    try {
+      await adminDeleteGame(game.code, adminKey)
+      setGames((current) => current.filter((item) => item.code !== game.code))
+      setMessage(`Game ${game.code} was deleted.`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not delete game')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const cleanup = async (scope: 'active' | 'completed') => {
+    if (!window.confirm(`Delete all ${scope} games shown by this backend?`)) return
+    setBusy(true)
+    try {
+      const result = await adminCleanupGames(adminKey, scope)
+      setMessage(`Closed ${result.activeClosed} active games and deleted ${result.completedDeleted} completed games.`)
+      await loadGames()
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Cleanup failed')
+      setBusy(false)
+    }
+  }
+
+  const filtered = games.filter((game) => {
+    const matchesText = !query || game.code.toLowerCase().includes(query.toLowerCase()) || game.hostName.toLowerCase().includes(query.toLowerCase())
+    return matchesText && (status === 'all' || game.status === status)
+  })
+
+  return (
+    <section className="admin-panel">
+      <div className="admin-heading"><div><p className="panel-kicker">ADMINISTRATION</p><h2>Stored games</h2><p>Active games are in memory. Completed games are SQLite snapshots.</p></div><ShieldCheck size={32} /></div>
+      <div className="admin-auth"><input type="password" value={adminKey} onChange={(event) => setAdminKey(event.target.value)} placeholder="Backend admin key" /><button className="primary" onClick={loadGames} disabled={busy}><RefreshCw size={16} /> Load games</button></div>
+      <p className="admin-message">{message}</p>
+      <div className="admin-filters"><label><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search room code or host" /></label><select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value="all">All statuses</option><option value="open">Open</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></div>
+      <div className="admin-actions"><button className="danger" onClick={() => cleanup('completed')} disabled={busy || !adminKey}>Delete all completed</button><button className="danger" onClick={() => cleanup('active')} disabled={busy || !adminKey}>Close all active</button></div>
+      <div className="admin-table-wrap"><table><thead><tr><th>Code</th><th>Host</th><th>Status</th><th>Round</th><th>Players</th><th>Connected</th><th>Storage</th><th /></tr></thead><tbody>{filtered.map((game) => <tr key={game.code}><td><strong>{game.code}</strong></td><td>{game.hostName}</td><td><span className={`game-status ${game.status}`}>{game.status.replace('_', ' ')}</span></td><td>{game.roundNumber}/13</td><td>{game.playerCount} + {game.botCount} bots</td><td>{game.connectedCount ?? '—'}</td><td>{game.storage}</td><td><button className="table-delete" onClick={() => deleteGame(game)} disabled={busy}><Trash2 size={15} /> Close</button></td></tr>)}</tbody></table>{filtered.length === 0 && <p className="empty-admin">No matching games.</p>}</div>
+    </section>
   )
 }
 
