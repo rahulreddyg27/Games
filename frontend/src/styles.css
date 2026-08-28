@@ -171,9 +171,118 @@ table { width: 100%; border-collapse: collapse; background: #07150f; }th, td { p
 }
 
 @media (max-width: 480px) {
-  .player-rail { grid-template-columns: 1fr; }.rule-strip { display: none; }.hero-copy { font-size: 13px; }.panel { padding: 20px; }
+  .rule-strip { display: none; }.hero-copy { font-size: 13px; }.panel { padding: 20px; }
   .lobby-code strong { font-size: 34px; }.played-card .card-face { width: 57px; height: 82px; }.played-card .card-face > span { font-size: 24px; }
   .trick-grid { gap: 8px; padding-inline: 0; }
 }
 
-@media (max-width: 760px) { .draw-grid { grid-template-columns: repeat(6, 1fr); }.draw-card { min-height: 64px; } }
+/* Keep the table and the player's cards in view on phone-sized screens. */
+@media (max-width: 600px) {
+  body { overflow-x: hidden; }
+  button, input, select { min-height: 44px; }
+  .home-shell, .game-shell { width: calc(100% - 16px); padding-top: max(12px, env(safe-area-inset-top)); padding-bottom: calc(32px + env(safe-area-inset-bottom)); }
+  .hero { gap: 11px; padding: 8px 0 20px; }
+  .hero > div:nth-child(2) { min-width: 0; }
+  .brand-mark { flex: 0 0 48px; width: 48px; height: 48px; border-radius: 14px; font-size: 28px; }
+  .hero h1 { font-size: clamp(25px, 8vw, 36px); }
+  .hero-copy { margin-top: 6px; line-height: 1.35; }
+  .admin-nav { flex: 0 0 44px; min-height: 44px; }
+  .panel, .admin-panel, .lobby-card, .draw-panel, .round-complete, .final-results { padding: 17px; border-radius: 18px; }
+  h2 { font-size: 22px; }
+  label { margin: 12px 0; }
+  input, select { font-size: 16px; } /* Prevent iOS from zooming when a field receives focus. */
+  .home-grid { gap: 12px; }
+  .close-game-panel { margin-top: 12px; gap: 8px; }
+
+  .game-header { gap: 8px; }
+  .game-header > div:first-child { min-width: 0; }
+  .header-title-row { gap: 6px; }
+  .header-actions { gap: 6px; }
+  .icon-button { flex: 0 0 42px; width: 42px; height: 42px; }
+  .connection { min-height: 42px; }
+  .rejoin-note { overflow-wrap: anywhere; }
+
+  .lobby-card { gap: 16px; }
+  .lobby-code { padding: 17px 10px; }
+  .lobby-code strong { font-size: clamp(30px, 11vw, 40px); letter-spacing: .12em; }
+  .players-list { max-height: 42vh; overflow-y: auto; overscroll-behavior: contain; }
+  .lobby-card .start { width: 100%; }
+
+  .draw-panel > p { line-height: 1.45; }
+  .draw-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 15px; }
+  .draw-card { min-width: 0; min-height: 62px; }
+  .cut-grid { max-height: 52vh; }
+  .cut-summary { gap: 6px 12px; }
+  .extra-cut { display: grid; grid-template-columns: 1fr; align-items: stretch; }
+  .extra-cut select, .extra-cut .primary { width: 100%; }
+  .draw-results { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .draw-results > div { padding: 11px 7px; }
+
+  .mini-results { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .round-complete .primary { width: 100%; }
+  .final-results h2 { font-size: 26px; }
+  .team-results div, .ranking div { grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; }
+  .ranking em { display: none; }
+  .score-toggle { min-height: 44px; }
+  .scoreboard-wrap, .score-round, .admin-table-wrap, .hand-scroll, .player-rail, .trick-grid { -webkit-overflow-scrolling: touch; overscroll-behavior-inline: contain; }
+  .scoreboard-wrap table, .score-round table { min-width: 650px; }
+
+  .admin-heading { gap: 10px; }
+  .admin-heading > svg { flex: 0 0 auto; }
+  .admin-auth .primary { width: 100%; }
+  .admin-actions { gap: 7px; }
+  .admin-actions .danger { width: 100%; }
+  .admin-table-wrap { max-width: 100%; }
+  .admin-table-wrap::after { content: 'Swipe table sideways to see every column'; display: block; position: sticky; left: 0; width: max-content; padding: 8px 11px; color: #82998c; font-size: 10px; }
+
+  .game-shell.phase-bidding, .game-shell.phase-playing { padding-bottom: 166px; }
+  .phase-bidding .game-header, .phase-playing .game-header { margin-bottom: 9px; }
+  .phase-bidding .game-header .eyebrow, .phase-playing .game-header .eyebrow { margin-bottom: 3px; }
+  .phase-bidding .rejoin-note, .phase-playing .rejoin-note { display: none; }
+  .phase-bidding .status-row, .phase-playing .status-row { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 9px; border-radius: 13px; }
+  .phase-bidding .status-row div, .phase-playing .status-row div { padding: 8px 7px; border-bottom: 0; border-right: 1px solid #183524; }
+  .phase-bidding .status-row div:last-child, .phase-playing .status-row div:last-child { border-right: 0; }
+  .phase-bidding .status-row span, .phase-playing .status-row span { font-size: 8px; letter-spacing: .05em; }
+  .phase-bidding .status-row strong, .phase-playing .status-row strong { font-size: 14px; white-space: nowrap; }
+
+  .phase-bidding .table-layout, .phase-playing .table-layout { gap: 8px; }
+  .phase-bidding .felt, .phase-playing .felt { min-height: 238px; padding: 13px; border-radius: 20px; }
+  .phase-bidding .felt::before, .phase-playing .felt::before { inset: 7px; border-radius: 15px; }
+  .phase-bidding .felt-top, .phase-playing .felt-top { font-size: 10px; }
+  .phase-bidding .trick-grid, .phase-playing .trick-grid { min-height: 174px; padding: 12px 0 5px; gap: 6px; flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; }
+  .phase-bidding .trick-grid:has(.empty-trick), .phase-playing .trick-grid:has(.empty-trick) { justify-content: center; }
+  .phase-bidding .empty-trick span, .phase-playing .empty-trick span { font-size: 47px; }
+  .phase-bidding .played-card .card-face, .phase-playing .played-card .card-face { width: 52px; height: 74px; padding: 5px; }
+  .phase-bidding .played-card .card-face > span, .phase-playing .played-card .card-face > span { font-size: 21px; }
+
+  .phase-bidding .player-rail, .phase-playing .player-rail { display: flex; overflow-x: auto; gap: 6px; padding-bottom: 3px; scrollbar-width: thin; }
+  .phase-bidding .seat, .phase-playing .seat { flex: 0 0 142px; grid-template-columns: 27px minmax(0, 1fr) auto; padding: 6px; gap: 6px; }
+  .phase-bidding .avatar, .phase-playing .avatar { width: 27px; height: 27px; border-radius: 8px; font-size: 12px; }
+  .phase-bidding .seat-info strong, .phase-playing .seat-info strong { font-size: 11px; }
+  .phase-bidding .seat-info .bid-won, .phase-playing .seat-info .bid-won { font-size: 10px; }
+  .phase-bidding .seat-score, .phase-playing .seat-score { font-size: 11px; }
+
+  .phase-bidding .hand-section, .phase-playing .hand-section { position: fixed; z-index: 30; left: 6px; right: 6px; bottom: max(6px, env(safe-area-inset-bottom)); margin: 0 auto; width: min(588px, calc(100% - 12px)); padding: 9px; border-radius: 16px; box-shadow: 0 -10px 35px rgba(0,0,0,.55); background: rgba(7,21,15,.97); backdrop-filter: blur(15px); }
+  .phase-bidding .hand-heading, .phase-playing .hand-heading { flex-direction: row; align-items: center; margin-bottom: 5px; }
+  .phase-bidding .hand-heading span, .phase-playing .hand-heading span { font-size: 9px; }
+  .phase-bidding .legend, .phase-playing .legend { display: none; }
+  .phase-bidding .hand-scroll, .phase-playing .hand-scroll { padding: 2px 2px 4px; gap: 5px; }
+  .phase-bidding .hand-card .card-face, .phase-playing .hand-card .card-face { width: 52px; height: 74px; padding: 5px; border-radius: 8px; }
+  .phase-bidding .hand-card .card-face b, .phase-playing .hand-card .card-face b { font-size: 13px; }
+  .phase-bidding .hand-card .card-face > span, .phase-playing .hand-card .card-face > span { font-size: 22px; }
+  .phase-bidding .hand-card.legal:hover, .phase-playing .hand-card.legal:hover { transform: none; }
+
+  .phase-bidding .action-panel, .phase-playing .action-panel { margin-top: 8px; padding: 11px; gap: 9px; }
+  .phase-bidding .action-panel > div:first-child, .phase-playing .action-panel > div:first-child { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .phase-bidding .action-panel span, .phase-playing .action-panel span { font-size: 10px; }
+}
+
+@media (min-width: 601px) and (max-width: 760px) { .draw-grid { grid-template-columns: repeat(6, 1fr); }.draw-card { min-height: 64px; } }
+
+@media (max-width: 370px) {
+  .hero-copy { display: none; }
+  .game-header h1 { font-size: 19px; }
+  .phase-bidding .played-card .card-face, .phase-playing .played-card .card-face,
+  .phase-bidding .hand-card .card-face, .phase-playing .hand-card .card-face { width: 48px; height: 69px; }
+  .mini-results { grid-template-columns: 1fr; }
+}

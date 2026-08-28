@@ -397,7 +397,7 @@ function Game({
   }
 
   return (
-    <main className="game-shell">
+    <main className={`game-shell phase-${state.phase}`}>
       <header className="game-header">
         <div>
           <p className="eyebrow">ROOM {state.code}</p>
