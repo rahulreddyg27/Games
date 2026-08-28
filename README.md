@@ -4,12 +4,13 @@ A local-first multiplayer implementation of the custom Spades game described in 
 
 ## Implemented rules
 
-- 2–8 players, with computer players filling empty seats when the host starts.
+- 2–16 players, with computer players filling empty seats when the host starts.
 - 13 rounds.
 - Round 1 deals 1 card/player, Round 2 deals 2, ... Round 13 deals 13.
 - Rooms with 2–3 players can choose 1 deck (53 cards including Joker) or 2 decks (105 cards including Joker).
 - Rooms with 4–7 players always use 2 decks + 1 Joker.
-- Rooms with 8 players always use 3 decks + 1 Joker (157 cards).
+- Rooms with 8–12 players always use 3 decks + 1 Joker (157 cards).
+- Rooms with 13–16 players always use 4 decks + 1 Joker (209 cards).
 - Before every round, the designated cutter cuts the shuffled shoe before the dealer deals.
 - Up to 105 cut positions appear as facedown cards; positions above 105 appear in a dropdown.
 - Cards are dealt one at a time beginning with that round's rotating first recipient.
@@ -72,6 +73,12 @@ Open:
 ```text
 http://localhost:5173
 ```
+
+### Admin game cleanup
+
+Open the **Admin** screen from the home page and enter the temporary admin key `Qwerty@123` to list or delete active in-memory rooms and completed SQLite snapshots. This key is hardcoded in the backend for early testing and must be replaced with secret-based configuration before wider use.
+
+The current admin list is instance-local: Azure restarts remove in-memory games and ephemeral SQLite data, and multiple replicas do not share a game list.
 
 The API runs on:
 
