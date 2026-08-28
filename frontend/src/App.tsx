@@ -197,8 +197,8 @@ function Home({
       <section className="hero">
         <div className="brand-mark">♠</div>
         <div>
-          <p className="eyebrow">FRIENDS SPADES</p>
-          <h1>Your table. Your rules.</h1>
+          <p className="eyebrow">Your Table</p>
+          <h1> SPADES </h1>
           <p className="hero-copy">
             13 rounds · wild Joker · 5 bags = −50 · live multiplayer
           </p>
