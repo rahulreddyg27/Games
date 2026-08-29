@@ -5,7 +5,7 @@ from typing import Literal
 
 Suit = Literal["clubs", "diamonds", "hearts", "spades"]
 GameMode = Literal["individual", "teams"]
-GamePhase = Literal["lobby", "drawing", "draw_complete", "bidding", "playing", "round_complete", "finished"]
+GamePhase = Literal["lobby", "drawing", "draw_complete", "cutting", "bidding", "playing", "round_complete", "finished"]
 
 SUIT_SYMBOLS = {
     "clubs": "♣",
@@ -57,12 +57,12 @@ class Player:
     hand: list[Card] = field(default_factory=list)
     bid: int | None = None
     tricks: int = 0
+    contribution_tricks: int = 0
     total_score: int = 0
     gross_score: int = 0
     bags: int = 0
     total_bags: int = 0
     draw_card: Card | None = None
-    rejoin_pin: str = ""
 
 
 @dataclass
@@ -83,6 +83,19 @@ class GameRoom:
     host_player_id: str
     max_players: int
     mode: GameMode
+    rejoin_pin: str = ""
+    team_count: int = 0
+    teams_locked: bool = False
+    team_captains: dict[str, str] = field(default_factory=dict)
+    team_bids: dict[str, int | None] = field(default_factory=dict)
+    team_scores: dict[str, int] = field(default_factory=dict)
+    team_gross_scores: dict[str, int] = field(default_factory=dict)
+    team_bags: dict[str, int] = field(default_factory=dict)
+    team_total_bags: dict[str, int] = field(default_factory=dict)
+    team_bid_order: list[str] = field(default_factory=list)
+    team_turn_index: int = 0
+    bidding_stage: str = "estimates"
+    chat_messages: list[dict] = field(default_factory=list)
     deck_count: int = 2
     players: list[Player] = field(default_factory=list)
     phase: GamePhase = "lobby"
@@ -91,10 +104,15 @@ class GameRoom:
     turn_seat: int = 0
     current_trick: list[TrickPlay] = field(default_factory=list)
     completed_tricks: int = 0
+    awaiting_next_trick: bool = False
     round_history: list[RoundSummary] = field(default_factory=list)
     last_trick_winner_id: str | None = None
     last_trick_cards: list[dict] = field(default_factory=list)
     draw_deck: list[Card] = field(default_factory=list)
+    pending_shoe: list[Card] = field(default_factory=list)
+    cutter_player_id: str | None = None
+    dealer_player_id: str | None = None
+    cut_position: int | None = None
     message: str = "Waiting for players"
 
     def player_by_id(self, player_id: str) -> Player:

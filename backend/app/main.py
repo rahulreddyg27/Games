@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import secrets
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -11,6 +13,9 @@ from .game_engine import (
     GameRuleError,
     advance_bots,
     advance_bot_draws,
+    advance_bot_cut,
+    cut_deck,
+    continue_after_trick,
     legal_card_ids,
     next_round,
     play_card,
@@ -18,11 +23,20 @@ from .game_engine import (
     start_game,
     start_card_draw,
     submit_bid,
+    submit_team_bid,
     team_totals,
 )
 from .models import GameRoom
-from .persistence import delete_completed_game, init_db, save_completed_game
+from .persistence import (
+    delete_all_completed_games,
+    delete_completed_game,
+    init_db,
+    list_completed_games,
+    save_completed_game,
+)
 from .store import store
+
+ADMIN_KEY = "Qwerty@123"
 
 
 @asynccontextmanager
@@ -43,9 +57,10 @@ app.add_middleware(
 
 class CreateRoomRequest(BaseModel):
     name: str = Field(min_length=1, max_length=24)
-    maxPlayers: int = Field(default=4, ge=2, le=8)
+    maxPlayers: int = Field(default=4, ge=2, le=16)
     mode: str = Field(default="individual", pattern="^(individual|teams)$")
-    deckCount: int = Field(default=2, ge=1, le=2)
+    teamCount: int = Field(default=2, ge=2, le=8)
+    deckCount: int = Field(default=2, ge=1, le=4)
 
 
 class JoinRoomRequest(BaseModel):
@@ -58,13 +73,45 @@ class CloseRoomRequest(BaseModel):
     rejoinPin: str = Field(pattern="^[0-9]{6}$")
 
 
+class AdminRequest(BaseModel):
+    adminKey: str = Field(min_length=1, max_length=256)
+
+
+class AdminCleanupRequest(AdminRequest):
+    scope: str = Field(pattern="^(active|completed|all)$")
+
+
+def verify_admin(admin_key: str) -> None:
+    if not secrets.compare_digest(admin_key, ADMIN_KEY):
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+
+async def remove_active_room(code: str, reason: str) -> bool:
+    code = code.upper()
+    if code not in store.rooms:
+        return False
+    for websocket in list(store.connections[code].values()):
+        try:
+            await websocket.close(code=4400, reason=reason)
+        except Exception:
+            pass
+    store.connections.pop(code, None)
+    store.rooms.pop(code, None)
+    return True
+
+
 def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
     current_player = None
     if room.players and room.phase in ("bidding", "playing"):
-        try:
-            current_player = room.player_by_seat(room.turn_seat).id
-        except KeyError:
-            current_player = None
+        if room.phase == "bidding" and room.mode == "teams" and room.bidding_stage == "teams" and room.team_turn_index < len(room.team_bid_order):
+            current_player = room.team_captains.get(room.team_bid_order[room.team_turn_index])
+        else:
+            try:
+                current_player = room.player_by_seat(room.turn_seat).id
+            except KeyError:
+                current_player = None
+    elif room.phase == "cutting":
+        current_player = room.cutter_player_id
 
     players = []
     for p in sorted(room.players, key=lambda item: item.seat):
@@ -79,6 +126,7 @@ def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
                 "bid": p.bid,
                 "bidSubmitted": p.bid is not None,
                 "tricks": p.tricks,
+                "contributionTricks": p.contribution_tricks,
                 "totalScore": p.total_score,
                 "grossScore": p.gross_score,
                 "bags": p.bags,
@@ -109,9 +157,14 @@ def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
         "hostPlayerId": room.host_player_id,
         "maxPlayers": room.max_players,
         "deckCount": room.deck_count,
+        "teamCount": room.team_count,
+        "teamsLocked": room.teams_locked,
+        "biddingStage": room.bidding_stage,
+        "teamBidOrder": room.team_bid_order,
         "mode": room.mode,
         "phase": room.phase,
         "roundNumber": room.round_number,
+        "leaderSeat": room.leader_seat,
         "message": room.message,
         "players": players,
         "currentPlayerId": current_player,
@@ -121,7 +174,12 @@ def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
         "lastTrickWinnerId": room.last_trick_winner_id,
         "lastTrickCards": room.last_trick_cards,
         "drawChoices": [card.id for card in room.draw_deck] if room.phase == "drawing" else [],
+        "cutCardCount": len(room.pending_shoe) if room.phase == "cutting" else 0,
+        "cutterPlayerId": room.cutter_player_id,
+        "dealerPlayerId": room.dealer_player_id,
+        "cutPosition": room.cut_position,
         "completedTricks": room.completed_tricks,
+        "awaitingNextTrick": room.awaiting_next_trick,
         "hand": hand,
         "legalCardIds": legal,
         "roundHistory": [
@@ -129,6 +187,7 @@ def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
         ],
         "individualRanking": individual_ranking,
         "teamRanking": team_totals(room),
+        "chatMessages": room.chat_messages,
     }
 
 
@@ -149,14 +208,29 @@ async def broadcast(room: GameRoom) -> None:
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True}
+    return {
+        "ok": True,
+        "apiVersion": 2,
+        "capabilities": ["team-bidding", "team-scoring", "room-chat"],
+    }
 
 
 @app.post("/rooms")
 async def create_room(body: CreateRoomRequest) -> dict:
-    deck_count = 2 if body.maxPlayers >= 5 else body.deckCount
-    room, player = store.create_room(body.name, body.maxPlayers, body.mode, deck_count)
-    return {"roomCode": room.code, "playerId": player.id, "rejoinPin": player.rejoin_pin, "state": serialize_room(room, player.id)}
+    valid_team_counts = [count for count in range(2, (body.maxPlayers // 2) + 1) if body.maxPlayers % count == 0]
+    if body.mode == "teams" and body.teamCount not in valid_team_counts:
+        choices = ", ".join(str(count) for count in valid_team_counts) or "none"
+        raise HTTPException(status_code=400, detail=f"Valid team counts for {body.maxPlayers} players: {choices}")
+    if body.maxPlayers >= 13:
+        deck_count = 4
+    elif body.maxPlayers >= 8:
+        deck_count = 3
+    elif body.maxPlayers >= 4:
+        deck_count = 2
+    else:
+        deck_count = min(body.deckCount, 2)
+    room, player = store.create_room(body.name, body.maxPlayers, body.mode, deck_count, body.teamCount)
+    return {"roomCode": room.code, "playerId": player.id, "rejoinPin": room.rejoin_pin, "state": serialize_room(room, player.id)}
 
 
 @app.post("/rooms/{code}/join")
@@ -168,7 +242,7 @@ async def join_room(code: str, body: JoinRoomRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     await broadcast(room)
-    return {"roomCode": room.code, "playerId": player.id, "rejoinPin": player.rejoin_pin, "state": serialize_room(room, player.id)}
+    return {"roomCode": room.code, "playerId": player.id, "rejoinPin": room.rejoin_pin, "state": serialize_room(room, player.id)}
 
 
 @app.delete("/rooms/{code}")
@@ -178,7 +252,7 @@ async def close_room(code: str, body: CloseRoomRequest) -> dict:
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
     host = room.player_by_id(room.host_player_id)
-    if host.name.casefold() != body.name.strip().casefold() or host.rejoin_pin != body.rejoinPin:
+    if host.name.casefold() != body.name.strip().casefold() or room.rejoin_pin != body.rejoinPin:
         raise HTTPException(status_code=403, detail="Host name or rejoin PIN is incorrect")
     for websocket in list(store.connections[code].values()):
         await websocket.close(code=4400, reason="Game closed by host")
@@ -186,6 +260,70 @@ async def close_room(code: str, body: CloseRoomRequest) -> dict:
     store.rooms.pop(code, None)
     delete_completed_game(code)
     return {"closed": True}
+
+
+@app.post("/admin/games")
+def admin_list_games(body: AdminRequest) -> dict:
+    verify_admin(body.adminKey)
+    completed = {game["code"]: game for game in list_completed_games()}
+    games = []
+    for room in store.rooms.values():
+        host = room.player_by_id(room.host_player_id)
+        if room.phase == "finished":
+            status = "completed"
+        elif room.phase == "lobby":
+            status = "open"
+        else:
+            status = "in_progress"
+        stored = completed.pop(room.code, None)
+        games.append(
+            {
+                "code": room.code,
+                "status": status,
+                "hostName": host.name,
+                "playerCount": len([player for player in room.players if not player.is_bot]),
+                "botCount": len([player for player in room.players if player.is_bot]),
+                "connectedCount": len([player for player in room.players if player.connected and not player.is_bot]),
+                "roundNumber": room.round_number,
+                "finishedAt": stored.get("finishedAt") if stored else None,
+                "storage": "memory + sqlite" if stored else "memory",
+            }
+        )
+    games.extend(completed.values())
+    status_order = {"in_progress": 0, "open": 1, "completed": 2}
+    games.sort(key=lambda game: (status_order.get(game["status"], 9), game["code"]))
+    return {"games": games}
+
+
+@app.delete("/admin/games/{code}")
+async def admin_delete_game(code: str, body: AdminRequest) -> dict:
+    verify_admin(body.adminKey)
+    code = code.upper()
+    removed_active = await remove_active_room(code, "Game closed by administrator")
+    completed_codes = {game["code"] for game in list_completed_games()}
+    removed_completed = code in completed_codes
+    delete_completed_game(code)
+    if not removed_active and not removed_completed:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return {"closed": True}
+
+
+@app.post("/admin/games/cleanup")
+async def admin_cleanup_games(body: AdminCleanupRequest) -> dict:
+    verify_admin(body.adminKey)
+    active_count = 0
+    completed_count = 0
+    if body.scope in ("active", "all"):
+        for code in list(store.rooms):
+            if await remove_active_room(code, "Games cleaned up by administrator"):
+                active_count += 1
+    elif body.scope == "completed":
+        for code, room in list(store.rooms.items()):
+            if room.phase == "finished" and await remove_active_room(code, "Completed games cleaned up by administrator"):
+                active_count += 1
+    if body.scope in ("completed", "all"):
+        completed_count = delete_all_completed_games()
+    return {"activeClosed": active_count, "completedDeleted": completed_count}
 
 
 @app.get("/rooms/{code}/players/{player_id}")
@@ -222,15 +360,43 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
 
     try:
         while True:
-            payload = await websocket.receive_json()
+            try:
+                payload = await websocket.receive_json()
+            except WebSocketDisconnect:
+                break
+            except RuntimeError as exc:
+                # Starlette raises this instead of WebSocketDisconnect when the
+                # server closes a socket (for example, when a host closes the room)
+                # while this handler is already waiting for the next message.
+                if "WebSocket is not connected" in str(exc):
+                    break
+                raise
             action = payload.get("action")
             try:
                 if action == "start_game":
                     if player_id != room.host_player_id:
                         raise GameRuleError("Only the host can start the game")
+                    if room.mode == "teams" and not room.teams_locked:
+                        raise GameRuleError("Lock the team assignments before starting the game")
                     store.fill_with_bots(room)
                     start_card_draw(room)
                     advance_bot_draws(room)
+                elif action == "set_team_count":
+                    if player_id != room.host_player_id:
+                        raise GameRuleError("Only the host can change the number of teams")
+                    store.set_team_count(room, int(payload.get("teamCount")))
+                elif action == "assign_team":
+                    if player_id != room.host_player_id:
+                        raise GameRuleError("Only the host can assign teams")
+                    store.assign_team(room, str(payload.get("playerId")), str(payload.get("team")))
+                elif action == "lock_teams":
+                    if player_id != room.host_player_id:
+                        raise GameRuleError("Only the host can lock teams")
+                    store.lock_teams(room)
+                elif action == "unlock_teams":
+                    if player_id != room.host_player_id:
+                        raise GameRuleError("Only the host can unlock teams")
+                    store.unlock_teams(room)
                 elif action == "pick_draw_card":
                     pick_draw_card(room, player_id, str(payload.get("cardId")))
                     advance_bot_draws(room)
@@ -238,19 +404,42 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
                     if player_id != room.host_player_id:
                         raise GameRuleError("Only the host can confirm the player order")
                     start_game(room)
+                    advance_bot_cut(room)
+                    advance_bots(room)
+                elif action == "cut_deck":
+                    cut_deck(room, player_id, int(payload.get("position")))
                     advance_bots(room)
                 elif action == "submit_bid":
                     submit_bid(room, player_id, int(payload.get("bid")))
                     advance_bots(room)
+                elif action == "submit_team_bid":
+                    submit_team_bid(room, player_id, int(payload.get("bid")))
+                    advance_bots(room)
+                elif action == "send_chat":
+                    message = str(payload.get("message", "")).strip()
+                    if not message:
+                        raise GameRuleError("Chat message cannot be empty")
+                    if len(message) > 500:
+                        raise GameRuleError("Chat messages are limited to 500 characters")
+                    room.chat_messages.append({
+                        "id": secrets.token_hex(8), "playerId": player.id, "playerName": player.name,
+                        "team": player.team, "message": message,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    room.chat_messages = room.chat_messages[-100:]
                 elif action == "play_card":
                     play_card(room, player_id, str(payload.get("cardId")))
                     advance_bots(room)
                     if room.phase == "finished":
                         save_completed_game(room.code, serialize_room(room, None))
+                elif action == "continue_trick":
+                    continue_after_trick(room)
+                    advance_bots(room)
                 elif action == "next_round":
                     if player_id != room.host_player_id:
                         raise GameRuleError("Only the host can start the next round")
                     next_round(room)
+                    advance_bot_cut(room)
                     advance_bots(room)
                 elif action == "ping":
                     await websocket.send_json({"type": "pong"})
@@ -260,7 +449,10 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
                 await broadcast(room)
             except (GameRuleError, ValueError, TypeError) as exc:
                 await websocket.send_json({"type": "error", "message": str(exc)})
-    except WebSocketDisconnect:
+    finally:
         store.connections[code].pop(player_id, None)
         player.connected = False
-        await broadcast(room)
+        if store.rooms.get(code) is room:
+            await broadcast(room)
+        else:
+            store.connections.pop(code, None)

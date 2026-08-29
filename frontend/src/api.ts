@@ -1,10 +1,18 @@
 import type { RoomState, Session } from './types'
 
-const protocol = window.location.protocol === 'https:' ? 'https' : 'http'
-const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-const host = window.location.hostname || 'localhost'
-export const API_BASE = `${protocol}://${host}:8000`
-export const WS_BASE = `${wsProtocol}://${host}:8000`
+// During Vite development, use the same machine that served the page. This
+// keeps localhost and LAN testing (for example, 10.0.0.33) on the local API
+// instead of accidentally sending LAN players to the deployed Azure backend.
+const isLocal = import.meta.env.DEV
+const localHostname = window.location.hostname
+
+export const API_BASE = isLocal
+  ? `http://${localHostname}:8000`
+  : 'https://card-game-api.purplecoast-1e73a5fa.westus2.azurecontainerapps.io'
+
+export const WS_BASE = isLocal
+  ? `ws://${localHostname}:8000`
+  : 'wss://card-game-api.purplecoast-1e73a5fa.westus2.azurecontainerapps.io'
 
 async function json<T>(response: Response): Promise<T> {
   const body = await response.json()
@@ -14,12 +22,12 @@ async function json<T>(response: Response): Promise<T> {
   return body as T
 }
 
-export async function createRoom(name: string, maxPlayers: number, mode: 'individual' | 'teams', deckCount: number) {
+export async function createRoom(name: string, maxPlayers: number, mode: 'individual' | 'teams', deckCount: number, teamCount: number) {
   return json<{ roomCode: string; playerId: string; rejoinPin: string; state: RoomState }>(
     await fetch(`${API_BASE}/rooms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, maxPlayers, mode, deckCount }),
+      body: JSON.stringify({ name, maxPlayers, mode, deckCount, teamCount }),
     }),
   )
 }
@@ -40,6 +48,48 @@ export async function closeRoom(code: string, name: string, rejoinPin: string) {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, rejoinPin }),
+    }),
+  )
+}
+
+export type AdminGame = {
+  code: string
+  status: 'open' | 'in_progress' | 'completed'
+  hostName: string
+  playerCount: number
+  botCount: number
+  connectedCount?: number
+  roundNumber: number
+  finishedAt: string | null
+  storage: string
+}
+
+export async function adminListGames(adminKey: string) {
+  return json<{ games: AdminGame[] }>(
+    await fetch(`${API_BASE}/admin/games`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminKey }),
+    }),
+  )
+}
+
+export async function adminDeleteGame(code: string, adminKey: string) {
+  return json<{ closed: boolean }>(
+    await fetch(`${API_BASE}/admin/games/${encodeURIComponent(code)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminKey }),
+    }),
+  )
+}
+
+export async function adminCleanupGames(adminKey: string, scope: 'active' | 'completed' | 'all') {
+  return json<{ activeClosed: number; completedDeleted: number }>(
+    await fetch(`${API_BASE}/admin/games/cleanup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminKey, scope }),
     }),
   )
 }
