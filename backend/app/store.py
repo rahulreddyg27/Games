@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import secrets
 import string
 import uuid
 from collections import defaultdict
@@ -30,13 +31,13 @@ class RoomStore:
             name=host_name.strip(),
             seat=0,
             team="A" if mode == "teams" else None,
-            rejoin_pin=f"{random.randint(0, 999999):06d}",
         )
         room = GameRoom(
             code=code,
             host_player_id=player.id,
             max_players=max_players,
             mode=mode,  # type: ignore[arg-type]
+            rejoin_pin=f"{secrets.randbelow(1_000_000):06d}",
             deck_count=deck_count,
             players=[player],
         )
@@ -53,7 +54,7 @@ class RoomStore:
             None,
         )
         if returning_player is not None:
-            if rejoin_pin != returning_player.rejoin_pin:
+            if rejoin_pin != room.rejoin_pin:
                 raise ValueError("That player name is already taken. Enter its rejoin PIN to return.")
             returning_player.connected = True
             room.message = f"{returning_player.name} rejoined the game"
@@ -77,7 +78,6 @@ class RoomStore:
             name=name.strip(),
             seat=seat,
             team=team,
-            rejoin_pin=f"{random.randint(0, 999999):06d}",
         )
         room.players.append(player)
         room.message = f"{player.name} joined ({len(room.players)}/{room.max_players})"

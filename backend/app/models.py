@@ -62,7 +62,6 @@ class Player:
     bags: int = 0
     total_bags: int = 0
     draw_card: Card | None = None
-    rejoin_pin: str = ""
 
 
 @dataclass
@@ -83,6 +82,7 @@ class GameRoom:
     host_player_id: str
     max_players: int
     mode: GameMode
+    rejoin_pin: str = ""
     deck_count: int = 2
     players: list[Player] = field(default_factory=list)
     phase: GamePhase = "lobby"

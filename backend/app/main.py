@@ -212,7 +212,7 @@ async def create_room(body: CreateRoomRequest) -> dict:
     else:
         deck_count = min(body.deckCount, 2)
     room, player = store.create_room(body.name, body.maxPlayers, body.mode, deck_count)
-    return {"roomCode": room.code, "playerId": player.id, "rejoinPin": player.rejoin_pin, "state": serialize_room(room, player.id)}
+    return {"roomCode": room.code, "playerId": player.id, "rejoinPin": room.rejoin_pin, "state": serialize_room(room, player.id)}
 
 
 @app.post("/rooms/{code}/join")
@@ -224,7 +224,7 @@ async def join_room(code: str, body: JoinRoomRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     await broadcast(room)
-    return {"roomCode": room.code, "playerId": player.id, "rejoinPin": player.rejoin_pin, "state": serialize_room(room, player.id)}
+    return {"roomCode": room.code, "playerId": player.id, "rejoinPin": room.rejoin_pin, "state": serialize_room(room, player.id)}
 
 
 @app.delete("/rooms/{code}")
@@ -234,7 +234,7 @@ async def close_room(code: str, body: CloseRoomRequest) -> dict:
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
     host = room.player_by_id(room.host_player_id)
-    if host.name.casefold() != body.name.strip().casefold() or host.rejoin_pin != body.rejoinPin:
+    if host.name.casefold() != body.name.strip().casefold() or room.rejoin_pin != body.rejoinPin:
         raise HTTPException(status_code=403, detail="Host name or rejoin PIN is incorrect")
     for websocket in list(store.connections[code].values()):
         await websocket.close(code=4400, reason="Game closed by host")

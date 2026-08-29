@@ -163,7 +163,7 @@ Included:
 - Final individual/team ranking.
 - WebSocket live synchronization.
 - Browser refresh/reconnect using local session data.
-- Case-insensitive unique player names within a room and private 6-digit rejoin PINs.
+- Case-insensitive unique player names within a room and one shared private 6-digit rejoin PIN per game.
 - Host-controlled room closure that removes active memory and completed SQLite data.
 
 Not yet included (good next phase):
