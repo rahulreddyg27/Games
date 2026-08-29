@@ -175,7 +175,7 @@ function Home({
   }
 
   const closeExisting = async () => {
-    if (!closeCode.trim() || !closeName.trim() || !/^\d{6}$/.test(closePin)) return setError('Enter the room code, host name, and 6-digit host rejoin PIN')
+    if (!closeCode.trim() || !closeName.trim() || !/^\d{6}$/.test(closePin)) return setError('Enter the room code, host name, and 6-digit game rejoin PIN')
     if (!window.confirm(`Permanently close room ${closeCode.toUpperCase()}?`)) return
     setBusy(true)
     try {
@@ -266,7 +266,7 @@ function Home({
             <input value={joinName} onChange={(e) => setJoinName(e.target.value)} placeholder="Sandeep" maxLength={24} />
           </label>
           <label>
-            Rejoin PIN <small>(only when returning as an existing player)</small>
+            Game rejoin PIN <small>(the shared PIN shown inside that game)</small>
             <input value={joinPin} onChange={(e) => setJoinPin(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit PIN" inputMode="numeric" />
           </label>
           <button className="secondary" onClick={join} disabled={busy}>Join Game</button>
@@ -277,7 +277,7 @@ function Home({
         <div><p className="panel-kicker">HOST CONTROL</p><h2>Close an existing game</h2><p>Removes the active room and any completed-game snapshot.</p></div>
         <input className="code-input" value={closeCode} onChange={(e) => setCloseCode(e.target.value.toUpperCase())} placeholder="Room code" maxLength={5} />
         <input value={closeName} onChange={(e) => setCloseName(e.target.value)} placeholder="Host name" maxLength={24} />
-        <input value={closePin} onChange={(e) => setClosePin(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Host rejoin PIN" inputMode="numeric" />
+        <input value={closePin} onChange={(e) => setClosePin(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Game rejoin PIN" inputMode="numeric" />
         <button className="danger" onClick={closeExisting} disabled={busy}><Trash2 size={17} /> Close Game</button>
       </section>
 
@@ -415,7 +415,7 @@ function Game({
 
       {error && <div className="error-banner compact">{error}</div>}
 
-      <div className="rejoin-note">Your private rejoin PIN: <strong>{rejoinPin}</strong> <span>Keep it private.</span></div>
+      <div className="rejoin-note">Game rejoin PIN: <strong>{rejoinPin}</strong> <span>Shared by every player in this game. Keep it private.</span></div>
 
       <section className="status-row">
         <div><span>ROUND</span><strong>{state.roundNumber || '—'} / 13</strong></div>
