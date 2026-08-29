@@ -1,15 +1,17 @@
 import type { RoomState, Session } from './types'
 
-const isLocal =
-  window.location.hostname === 'localhost' ||
-  window.location.hostname === '127.0.0.1'
+// During Vite development, use the same machine that served the page. This
+// keeps localhost and LAN testing (for example, 10.0.0.33) on the local API
+// instead of accidentally sending LAN players to the deployed Azure backend.
+const isLocal = import.meta.env.DEV
+const localHostname = window.location.hostname
 
 export const API_BASE = isLocal
-  ? 'http://localhost:8000'
+  ? `http://${localHostname}:8000`
   : 'https://card-game-api.purplecoast-1e73a5fa.westus2.azurecontainerapps.io'
 
 export const WS_BASE = isLocal
-  ? 'ws://localhost:8000'
+  ? `ws://${localHostname}:8000`
   : 'wss://card-game-api.purplecoast-1e73a5fa.westus2.azurecontainerapps.io'
 
 async function json<T>(response: Response): Promise<T> {
@@ -20,12 +22,12 @@ async function json<T>(response: Response): Promise<T> {
   return body as T
 }
 
-export async function createRoom(name: string, maxPlayers: number, mode: 'individual' | 'teams', deckCount: number) {
+export async function createRoom(name: string, maxPlayers: number, mode: 'individual' | 'teams', deckCount: number, teamCount: number) {
   return json<{ roomCode: string; playerId: string; rejoinPin: string; state: RoomState }>(
     await fetch(`${API_BASE}/rooms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, maxPlayers, mode, deckCount }),
+      body: JSON.stringify({ name, maxPlayers, mode, deckCount, teamCount }),
     }),
   )
 }

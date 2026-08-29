@@ -41,6 +41,19 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Wait for compatible API deployment
+        run: |
+          for attempt in {1..60}; do
+            if curl --fail --silent https://card-game-api.purplecoast-1e73a5fa.westus2.azurecontainerapps.io/health | grep --extended-regexp --quiet '"apiVersion"[[:space:]]*:[[:space:]]*2'; then
+              echo "Compatible API is ready."
+              exit 0
+            fi
+            echo "Waiting for API deployment ($attempt/60)..."
+            sleep 10
+          done
+          echo "The API did not reach the required version; frontend deployment stopped to prevent an incompatible release."
+          exit 1
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 

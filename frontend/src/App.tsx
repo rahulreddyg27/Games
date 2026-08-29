@@ -1,10 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Copy, LogOut, Play, RefreshCw, RotateCcw, Search, ShieldCheck, Trash2, Users, Wifi, WifiOff } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { ArrowLeft, Copy, LogOut, MessageCircle, Play, RefreshCw, RotateCcw, Search, Send, ShieldCheck, Trash2, Users, Wifi, WifiOff, X } from 'lucide-react'
 import { adminCleanupGames, adminDeleteGame, adminListGames, closeRoom, createRoom, joinRoom, resumeRoom, WS_BASE } from './api'
 import type { AdminGame } from './api'
 import type { Card, RoomState, Session } from './types'
 
 const SESSION_KEY = 'friends-spades-session'
+
+function normalizeRoomState(state: RoomState): RoomState {
+  // Keep the UI usable while an older room snapshot or an API revision is
+  // briefly present during deployment. New collections must never crash render.
+  return {
+    ...state,
+    biddingStage: state.biddingStage ?? 'estimates',
+    teamBidOrder: Array.isArray(state.teamBidOrder) ? state.teamBidOrder : [],
+    teamRanking: Array.isArray(state.teamRanking) ? state.teamRanking : [],
+    chatMessages: Array.isArray(state.chatMessages) ? state.chatMessages : [],
+    players: (state.players ?? []).map((player) => ({
+      ...player,
+      contributionTricks: player.contributionTricks ?? 0,
+    })),
+  }
+}
 
 function loadSession(): Session | null {
   try {
@@ -30,7 +46,7 @@ export default function App() {
   useEffect(() => {
     if (!session) return
     resumeRoom(session)
-      .then(({ state }) => setState(state))
+      .then(({ state }) => setState(normalizeRoomState(state)))
       .catch(() => {
         saveSession(null)
         setSession(null)
@@ -53,7 +69,7 @@ export default function App() {
       }
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data)
-        if (msg.type === 'state') setState(msg.state)
+        if (msg.type === 'state') setState(normalizeRoomState(msg.state))
         if (msg.type === 'error') setError(msg.message)
       }
       ws.onclose = (event) => {
@@ -91,7 +107,7 @@ export default function App() {
   const enter = (roomCode: string, playerId: string, rejoinPin: string, initial: RoomState) => {
     const next = { roomCode, playerId, rejoinPin }
     saveSession(next)
-    setState(initial)
+    setState(normalizeRoomState(initial))
     setSession(next)
   }
 
@@ -139,20 +155,24 @@ function Home({
   const [maxPlayers, setMaxPlayers] = useState(2)
   const [deckCount, setDeckCount] = useState(2)
   const [mode, setMode] = useState<'individual' | 'teams'>('individual')
+  const [teamCount, setTeamCount] = useState(2)
   const [busy, setBusy] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
-  const teamEligible = maxPlayers >= 4 && maxPlayers % 2 === 0
+  const teamCounts = Array.from({ length: Math.max(0, Math.floor(maxPlayers / 2) - 1) }, (_, index) => index + 2)
+    .filter((count) => maxPlayers % count === 0)
+  const teamEligible = teamCounts.length > 0
 
   useEffect(() => {
     if (!teamEligible && mode === 'teams') setMode('individual')
-  }, [teamEligible, mode])
+    if (teamEligible && !teamCounts.includes(teamCount)) setTeamCount(teamCounts[0])
+  }, [maxPlayers, mode, teamCount, teamEligible])
 
   const create = async () => {
     if (!createName.trim()) return setError('Enter your name')
     setBusy(true)
     try {
       const requiredDecks = maxPlayers >= 13 ? 4 : maxPlayers >= 8 ? 3 : maxPlayers >= 4 ? 2 : deckCount
-      const result = await createRoom(createName.trim(), maxPlayers, mode, requiredDecks)
+      const result = await createRoom(createName.trim(), maxPlayers, mode, requiredDecks, teamCount)
       onEnter(result.roomCode, result.playerId, result.rejoinPin, result.state)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create room')
@@ -248,9 +268,17 @@ function Home({
             Score mode
             <select value={mode} onChange={(e) => setMode(e.target.value as 'individual' | 'teams')}>
               <option value="individual">Individual</option>
-              <option value="teams" disabled={!teamEligible}>2 Teams (even counts from 4–16)</option>
+              <option value="teams" disabled={!teamEligible}>{teamEligible ? 'Teams' : 'Teams unavailable for this player count'}</option>
             </select>
           </label>
+          {mode === 'teams' && (
+            <label>
+              Team setup
+              <select value={teamCount} onChange={(e) => setTeamCount(Number(e.target.value))}>
+                {teamCounts.map((count) => <option key={count} value={count}>{count} teams · {maxPlayers / count} players per team</option>)}
+              </select>
+            </label>
+          )}
           <button className="primary" onClick={create} disabled={busy}>Create Game</button>
         </div>
 
@@ -379,8 +407,15 @@ function Game({
   const isHost = state.hostPlayerId === playerId
   const [bid, setBid] = useState(0)
   const [showScore, setShowScore] = useState(false)
+  const [showChat, setShowChat] = useState(false)
+  const [lastReadMessages, setLastReadMessages] = useState(0)
+  const myTeam = state.mode === 'teams' ? state.teamRanking.find((team) => team.team === me.team) : null
+  const unreadMessages = Math.max(0, state.chatMessages.length - lastReadMessages)
 
   useEffect(() => setBid(0), [state.roundNumber])
+  useEffect(() => {
+    if (showChat) setLastReadMessages(state.chatMessages.length)
+  }, [showChat, state.chatMessages.length])
 
   const copyCode = async () => {
     await navigator.clipboard?.writeText(state.code)
@@ -409,6 +444,7 @@ function Game({
         <div className="header-actions">
           <span className={`connection ${connected ? 'online' : ''}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}{connected ? 'Live' : 'Reconnecting'}</span>
           {isHost && <button className="icon-button danger-icon" onClick={endGame} title="Close game"><Trash2 size={18} /></button>}
+          <button className="icon-button chat-toggle" onClick={() => setShowChat(true)} title="Open game chat"><MessageCircle size={18} />{unreadMessages > 0 && <small>{unreadMessages}</small>}</button>
           <button className="icon-button" onClick={leave} title="Leave"><LogOut size={18} /></button>
         </div>
       </header>
@@ -420,8 +456,8 @@ function Game({
       <section className="status-row">
         <div><span>ROUND</span><strong>{state.roundNumber || '—'} / 13</strong></div>
         <div><span>TRICKS</span><strong>{state.completedTricks} / {state.roundNumber || '—'}</strong></div>
-        <div><span>YOUR SCORE</span><strong>{me.totalScore}</strong></div>
-        <div><span>BAGS</span><strong>{me.bags} / 5</strong></div>
+        <div><span>{myTeam ? `TEAM ${myTeam.team} SCORE` : 'YOUR SCORE'}</span><strong>{myTeam?.score ?? me.totalScore}</strong></div>
+        <div><span>{myTeam ? 'TEAM BAGS' : 'BAGS'}</span><strong>{myTeam?.bags ?? me.bags} / 5</strong></div>
       </section>
 
       {state.phase === 'lobby' ? (
@@ -463,6 +499,7 @@ function Game({
           {showScore && <Scoreboard state={state} />}
         </section>
       )}
+      {showChat && <ChatPanel state={state} playerId={playerId} send={send} onClose={() => setShowChat(false)} />}
     </main>
   )
 }
@@ -490,9 +527,9 @@ function DrawResults({ state, isHost, send }: { state: RoomState; isHost: boolea
   const ranking = state.players.slice().reverse()
   return (
     <section className="draw-panel results">
-      <p className="eyebrow">PLAYER ORDER</p>
-      <h2>Draw ranking · highest to lowest</h2>
-      <p>Rank is compared first. Suit is considered only when two players draw the same rank.</p>
+      <p className="eyebrow">FINAL SEATING</p>
+      <h2>Last bidder to first bidder</h2>
+      <p>{state.mode === 'teams' ? 'Teams alternate around the table. The strongest team draw holds the final seat and bids last.' : 'Rank is compared first. Suit is considered only when two players draw the same rank.'}</p>
       <div className="draw-results">
         {ranking.map((player, index) => {
           const bidPosition = state.players.findIndex((item) => item.id === player.id)
@@ -547,6 +584,11 @@ function DeckCut({ state, playerId, send }: { state: RoomState; playerId: string
 }
 
 function Lobby({ state, isHost, send }: { state: RoomState; isHost: boolean; send: (p: Record<string, unknown>) => void }) {
+  const teamLabels = Array.from({ length: state.teamCount }, (_, index) => String.fromCharCode(65 + index))
+  const validTeamCounts = Array.from({ length: Math.max(0, Math.floor(state.maxPlayers / 2) - 1) }, (_, index) => index + 2)
+    .filter((count) => state.maxPlayers % count === 0)
+  const teamCapacity = state.mode === 'teams' ? state.maxPlayers / state.teamCount : 0
+  const teamSizes = Object.fromEntries(teamLabels.map((team) => [team, state.players.filter((player) => player.team === team).length]))
   return (
     <section className="lobby-card">
       <div className="lobby-code">
@@ -555,20 +597,45 @@ function Lobby({ state, isHost, send }: { state: RoomState; isHost: boolean; sen
         <p>{state.deckCount} {state.deckCount === 1 ? 'deck' : 'decks'} + Joker · Share this code with your friends.</p>
       </div>
       <div className="players-list">
-        <div className="list-heading"><Users size={18} /> Players <span>{state.players.length}/{state.maxPlayers}</span></div>
+        <div className="list-heading"><Users size={18} /> Players <span>{state.players.length}/{state.maxPlayers}{state.mode === 'teams' ? ` · ${state.teamCount} teams` : ''}</span></div>
+        {state.mode === 'teams' && (
+          <div className="team-editor">
+            <label>Number of teams
+              <select value={state.teamCount} disabled={!isHost || state.teamsLocked} onChange={(event) => send({ action: 'set_team_count', teamCount: Number(event.target.value) })}>
+                {validTeamCounts.map((count) => <option key={count} value={count}>{count} teams · {state.maxPlayers / count} each</option>)}
+              </select>
+            </label>
+            <div className="team-counts">{teamLabels.map((team) => <span key={team} className={teamSizes[team] > teamCapacity ? 'overfilled' : ''}>Team {team}: {teamSizes[team]}/{teamCapacity}</span>)}</div>
+            {isHost && (state.teamsLocked
+              ? <button className="secondary" onClick={() => send({ action: 'unlock_teams' })}>Edit teams</button>
+              : <button className="primary" onClick={() => send({ action: 'lock_teams' })}>Lock teams</button>)}
+            {!isHost && <p className="team-lock-status">{state.teamsLocked ? 'Teams are locked.' : 'The host is arranging teams.'}</p>}
+          </div>
+        )}
         {state.players.map((p) => (
           <div className="player-row" key={p.id}>
             <span className={`presence ${p.connected ? 'present' : ''}`} />
             <strong>{p.name}</strong>
             {p.isBot && <em>BOT</em>}
-            {p.team && <em>Team {p.team}</em>}
+            {p.team && (isHost ? (
+              <select
+                className="team-select"
+                aria-label={`Team for ${p.name}`}
+                value={p.team}
+                disabled={state.teamsLocked}
+                onChange={(event) => send({ action: 'assign_team', playerId: p.id, team: event.target.value })}
+              >
+                {teamLabels.map((team) => <option key={team} value={team}>Team {team}</option>)}
+              </select>
+            ) : <em>Team {p.team}</em>)}
             {p.id === state.hostPlayerId && <small>HOST</small>}
           </div>
         ))}
+        {state.mode === 'teams' && isHost && <p className="team-help">Arrange players freely, review each team count, then lock the teams. Overfilled teams cannot be locked.</p>}
       </div>
       {isHost ? (
-        <button className="primary start" onClick={() => send({ action: 'start_game' })}>
-          <Play size={18} fill="currentColor" /> Start Game {state.players.length < state.maxPlayers ? 'with Computers' : ''}
+        <button className="primary start" disabled={state.mode === 'teams' && !state.teamsLocked} onClick={() => send({ action: 'start_game' })}>
+          <Play size={18} fill="currentColor" /> {state.mode === 'teams' && !state.teamsLocked ? 'Lock Teams to Start' : `Start Game ${state.players.length < state.maxPlayers ? 'with Computers' : ''}`}
         </button>
       ) : (
         <p className="waiting">Waiting for the host to start…</p>
@@ -580,16 +647,17 @@ function Lobby({ state, isHost, send }: { state: RoomState; isHost: boolean; sen
 function PlayerRail({ state, playerId }: { state: RoomState; playerId: string }) {
   return (
     <aside className="player-rail">
-      {state.players.map((p) => (
-        <div key={p.id} className={`seat ${p.id === playerId ? 'me' : ''} ${state.currentPlayerId === p.id ? 'active' : ''}`}>
+      {state.players.map((p) => {
+        const team = state.teamRanking.find((item) => item.team === p.team)
+        return <div key={p.id} className={`seat ${p.id === playerId ? 'me' : ''} ${state.currentPlayerId === p.id ? 'active' : ''}`}>
           <div className="avatar">{p.name.slice(0, 1).toUpperCase()}</div>
           <div className="seat-info">
             <strong>{p.name}{p.id === playerId ? ' · You' : ''}</strong>
-            <span className="bid-won">{p.bidSubmitted ? `Bid ${p.bid ?? '✓'}` : 'No bid'} · Won {p.tricks}</span>
+            <span className="bid-won">{state.mode === 'teams' ? `Team ${p.team} · Estimate ${p.bidSubmitted ? p.bid : '—'} · Won ${p.tricks}` : `${p.bidSubmitted ? `Bid ${p.bid ?? '✓'}` : 'No bid'} · Won ${p.tricks}`}</span>
           </div>
-          <div className="seat-score">{p.totalScore}<small>{p.bags}b</small></div>
+          <div className="seat-score">{team?.score ?? p.totalScore}<small>{team?.bags ?? p.bags}b</small></div>
         </div>
-      ))}
+      })}
     </aside>
   )
 }
@@ -640,6 +708,38 @@ function BidPanel({
   setBid: (v: number) => void
   send: (p: Record<string, unknown>) => void
 }) {
+  if (state.mode === 'teams') {
+    const current = state.players.find((player) => player.id === state.currentPlayerId)
+    const myTeam = state.teamRanking.find((team) => team.team === me.team)
+    const currentTeam = state.teamRanking.find((team) => team.captainId === state.currentPlayerId && team.bid === null)
+    const canAct = state.currentPlayerId === me.id
+    return (
+      <section className="team-bid-panel">
+        <div className="team-bid-heading">
+          <div><strong>{state.biddingStage === 'estimates' ? 'Public player estimates' : 'Combined team bids'}</strong><span>{state.biddingStage === 'estimates' ? 'Each estimate is visible to the entire table.' : 'The permanent team captain locks one final bid.'}</span></div>
+          {state.biddingStage === 'teams' && myTeam && <b>Team {myTeam.team}: {myTeam.bid === null ? 'Not locked' : `${myTeam.bid} locked`}</b>}
+        </div>
+        <div className="estimate-grid">
+          {state.players.map((player) => <div key={player.id}><span>{player.name} · Team {player.team}</span><strong>{player.bidSubmitted ? player.bid : '—'}</strong></div>)}
+        </div>
+        {state.biddingStage === 'teams' && (
+          <div className="team-bid-status">
+            {state.teamBidOrder.map((label) => {
+              const team = state.teamRanking.find((item) => item.team === label)
+              const captain = state.players.find((player) => player.id === team?.captainId)
+              return <span key={label} className={team?.bid !== null ? 'locked' : ''}>Team {label}: {team?.bid ?? '—'} <small>Captain {captain?.name ?? '—'}</small></span>
+            })}
+          </div>
+        )}
+        {canAct ? (
+          <div className="team-bid-action">
+            <div><strong>{state.biddingStage === 'estimates' ? 'Your estimate' : `Final bid for Team ${me.team}`}</strong><span>{state.roundNumber} total tricks are available this round.</span></div>
+            <BidControls roundNumber={state.roundNumber} bid={bid} setBid={setBid} label={state.biddingStage === 'estimates' ? 'Lock Estimate' : 'Lock Team Bid'} onSubmit={() => send({ action: state.biddingStage === 'estimates' ? 'submit_bid' : 'submit_team_bid', bid })} />
+          </div>
+        ) : <p className="waiting">Waiting for {current?.name ?? (currentTeam ? `Team ${currentTeam.team}'s captain` : 'the next bidder')}.</p>}
+      </section>
+    )
+  }
   if (me.bidSubmitted) {
     return <section className="action-panel"><strong>Guess submitted ✓</strong><span>Waiting for the other players.</span></section>
   }
@@ -653,22 +753,17 @@ function BidPanel({
         <strong>Your Guess</strong>
         <span>You have {state.roundNumber} card{state.roundNumber === 1 ? '' : 's'} this round.</span>
       </div>
-      <div className="bid-controls">
-        <div className="quick-bids">
-          {Array.from({ length: Math.min(state.roundNumber, 5) + 1 }, (_, i) => (
-            <button key={i} className={bid === i ? 'selected' : ''} onClick={() => setBid(i)}>{i}</button>
-          ))}
-        </div>
-        {state.roundNumber > 5 && (
-          <select aria-label="Bids above 5" value={bid > 5 ? bid : ''} onChange={(e) => setBid(Number(e.target.value))}>
-            <option value="" disabled>6+</option>
-            {Array.from({ length: state.roundNumber - 5 }, (_, i) => i + 6).map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
-        )}
-        <button className="primary" onClick={() => send({ action: 'submit_bid', bid })}>Lock Guess</button>
-      </div>
+      <BidControls roundNumber={state.roundNumber} bid={bid} setBid={setBid} label="Lock Guess" onSubmit={() => send({ action: 'submit_bid', bid })} />
     </section>
   )
+}
+
+function BidControls({ roundNumber, bid, setBid, label, onSubmit }: { roundNumber: number; bid: number; setBid: (value: number) => void; label: string; onSubmit: () => void }) {
+  return <div className="bid-controls">
+    <div className="quick-bids">{Array.from({ length: Math.min(roundNumber, 5) + 1 }, (_, i) => <button key={i} className={bid === i ? 'selected' : ''} onClick={() => setBid(i)}>{i}</button>)}</div>
+    {roundNumber > 5 && <select aria-label="Bids above 5" value={bid > 5 ? bid : ''} onChange={(event) => setBid(Number(event.target.value))}><option value="" disabled>6+</option>{Array.from({ length: roundNumber - 5 }, (_, i) => i + 6).map((value) => <option key={value} value={value}>{value}</option>)}</select>}
+    <button className="primary" onClick={onSubmit}>{label}</button>
+  </div>
 }
 
 function Hand({ state, playerId, send }: { state: RoomState; playerId: string; send: (p: Record<string, unknown>) => void }) {
@@ -746,7 +841,9 @@ function FinalResults({ state }: { state: RoomState }) {
         </div>
       )}
       <div className="ranking">
-        {state.individualRanking.map((p, i) => (
+        {state.mode === 'teams' ? state.players.slice().sort((a, b) => b.contributionTricks - a.contributionTricks).map((player, i) => (
+          <div key={player.id}><span>#{i + 1}</span><strong>{player.name}</strong><em>Team {player.team}</em><b>{player.contributionTricks}</b><small>contribution tricks</small></div>
+        )) : state.individualRanking.map((p, i) => (
           <div key={p.playerId}><span>#{i + 1}</span><strong>{p.name}</strong>{p.team && <em>Team {p.team}</em>}<b>{p.score}</b><small>{p.bags} bags</small></div>
         ))}
       </div>
@@ -760,13 +857,16 @@ function Scoreboard({ state }: { state: RoomState }) {
       <h3>Current standings</h3>
       <p className="score-explainer">Total score is the score before bag penalties. Actual score is the final score after all bag penalties.</p>
       <table>
-        <thead><tr><th>Player</th><th>Current bags</th><th>Total bags</th><th>Total score</th><th>Actual score</th><th>Bid</th><th>Won</th></tr></thead>
+        <thead><tr><th>{state.mode === 'teams' ? 'Team' : 'Player'}</th><th>Current bags</th><th>Total bags</th><th>Total score</th><th>Actual score</th><th>Bid</th><th>Won</th></tr></thead>
         <tbody>
-          {state.players.slice().sort((a, b) => b.totalScore - a.totalScore).map((p) => (
+          {state.mode === 'teams' ? state.teamRanking.map((team) => (
+            <tr key={team.team}><td>Team {team.team}</td><td>{team.bags}</td><td>{team.totalBags}</td><td>{team.grossScore}</td><td><strong>{team.score}</strong></td><td>{team.bid ?? '—'}</td><td>{team.tricks}</td></tr>
+          )) : state.players.slice().sort((a, b) => b.totalScore - a.totalScore).map((p) => (
             <tr key={p.id}><td>{p.name}{p.team ? ` · ${p.team}` : ''}</td><td>{p.bags}</td><td>{p.totalBags}</td><td>{p.grossScore}</td><td><strong>{p.totalScore}</strong></td><td>{p.bid ?? '—'}</td><td>{p.tricks}</td></tr>
           ))}
         </tbody>
       </table>
+      {state.mode === 'teams' && <><h3>Player contributions</h3><table><thead><tr><th>Player</th><th>Team</th><th>Public estimate</th><th>This round</th><th>Game total</th></tr></thead><tbody>{state.players.map((player) => <tr key={player.id}><td>{player.name}</td><td>Team {player.team}</td><td>{player.bid ?? '—'}</td><td>{player.tricks}</td><td>{player.contributionTricks}</td></tr>)}</tbody></table></>}
       <h3>Round-by-round score calculation</h3>
       <p className="score-explainer">Previous score + round points + bag penalty = new total. Every 5 accumulated bags produces a −50 penalty and removes 5 bags.</p>
       {state.roundHistory.slice().reverse().map((round) => (
@@ -792,6 +892,30 @@ function Scoreboard({ state }: { state: RoomState }) {
       ))}
     </div>
   )
+}
+
+function ChatPanel({ state, playerId, send, onClose }: { state: RoomState; playerId: string; send: (payload: Record<string, unknown>) => void; onClose: () => void }) {
+  const [message, setMessage] = useState('')
+  const endRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), [state.chatMessages.length])
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    const clean = message.trim()
+    if (!clean) return
+    send({ action: 'send_chat', message: clean })
+    setMessage('')
+  }
+  return <div className="chat-backdrop" onClick={onClose}>
+    <aside className="chat-panel" onClick={(event) => event.stopPropagation()}>
+      <header><div><strong>Game chat</strong><span>Visible to every player in this room</span></div><button className="icon-button" onClick={onClose}><X size={18} /></button></header>
+      <div className="chat-messages">
+        {state.chatMessages.length === 0 && <p className="waiting">No messages yet. Start the conversation.</p>}
+        {state.chatMessages.map((item) => <div key={item.id} className={`chat-message ${item.playerId === playerId ? 'mine' : ''}`}><small>{item.playerName}{item.team ? ` · Team ${item.team}` : ''}</small><p>{item.message}</p></div>)}
+        <div ref={endRef} />
+      </div>
+      <form onSubmit={submit}><input maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Message everyone…" /><button className="primary" type="submit" disabled={!message.trim()}><Send size={17} /></button></form>
+    </aside>
+  </div>
 }
 
 function formatSigned(value: number) {
