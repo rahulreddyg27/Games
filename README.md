@@ -148,11 +148,13 @@ Included:
 - Solo play against computer players.
 - Join by room code.
 - Host start control.
-- Individual or two-team mode.
+- Individual mode or evenly divided multi-team mode with host-controlled lobby assignment and locking.
 - Automatic card dealing by round.
 - Hidden bidding until everyone bids.
 - Server-authoritative card validation.
 - Player-controlled deck cutting before every round.
+- Team-aware seating that separates teammates and preserves the strongest draw as the last bidder.
+- Continuous bidding rotation anchored backward from Round 13, with no final-round reset.
 - Follow-suit validation.
 - Spade trump logic.
 - Wild Joker logic.
@@ -172,7 +174,7 @@ Not yet included (good next phase):
 - Cloud deployment.
 - Voice/video chat.
 - Spectators.
-- Custom team assignment UI.
+- Team bidding rules beyond host-controlled lobby assignment and balanced automatic assignment.
 - Animations/sounds.
 - Native App Store app/PWA install flow.
 - Timers/AFK handling.

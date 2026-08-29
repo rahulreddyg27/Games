@@ -17,6 +17,7 @@ export type PlayerState = {
   bid: number | null
   bidSubmitted: boolean
   tricks: number
+  contributionTricks: number
   totalScore: number
   grossScore: number
   bags: number
@@ -48,6 +49,10 @@ export type RoomState = {
   hostPlayerId: string
   maxPlayers: number
   deckCount: number
+  teamCount: number
+  teamsLocked: boolean
+  biddingStage: 'estimates' | 'teams'
+  teamBidOrder: string[]
   mode: 'individual' | 'teams'
   phase: 'lobby' | 'drawing' | 'draw_complete' | 'cutting' | 'bidding' | 'playing' | 'round_complete' | 'finished'
   roundNumber: number
@@ -69,7 +74,8 @@ export type RoomState = {
   legalCardIds: string[]
   roundHistory: { roundNumber: number; rows: RoundRow[] }[]
   individualRanking: { playerId: string; name: string; team: string | null; score: number; bags: number }[]
-  teamRanking: { team: string; score: number }[]
+  teamRanking: { team: string; score: number; grossScore: number; bags: number; totalBags: number; bid: number | null; tricks: number; captainId: string | null }[]
+  chatMessages: { id: string; playerId: string; playerName: string; team: string | null; message: string; timestamp: string }[]
 }
 
 export type Session = {

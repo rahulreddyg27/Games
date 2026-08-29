@@ -22,3 +22,15 @@ def test_admin_key_protects_game_list_and_can_delete_room():
         )
         assert deleted.status_code == 200
         assert room.code not in store.rooms
+
+
+def test_room_creation_validates_and_returns_multi_team_configuration():
+    with TestClient(app) as client:
+        invalid = client.post("/rooms", json={"name": "Rahul", "maxPlayers": 9, "mode": "teams", "teamCount": 2, "deckCount": 3})
+        assert invalid.status_code == 400
+        assert "Valid team counts for 9 players: 3" in invalid.json()["detail"]
+
+        created = client.post("/rooms", json={"name": "Rahul", "maxPlayers": 9, "mode": "teams", "teamCount": 3, "deckCount": 3})
+        assert created.status_code == 200
+        assert created.json()["state"]["teamCount"] == 3
+        store.rooms.pop(created.json()["roomCode"], None)

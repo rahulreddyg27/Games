@@ -57,6 +57,7 @@ class Player:
     hand: list[Card] = field(default_factory=list)
     bid: int | None = None
     tricks: int = 0
+    contribution_tricks: int = 0
     total_score: int = 0
     gross_score: int = 0
     bags: int = 0
@@ -83,6 +84,18 @@ class GameRoom:
     max_players: int
     mode: GameMode
     rejoin_pin: str = ""
+    team_count: int = 0
+    teams_locked: bool = False
+    team_captains: dict[str, str] = field(default_factory=dict)
+    team_bids: dict[str, int | None] = field(default_factory=dict)
+    team_scores: dict[str, int] = field(default_factory=dict)
+    team_gross_scores: dict[str, int] = field(default_factory=dict)
+    team_bags: dict[str, int] = field(default_factory=dict)
+    team_total_bags: dict[str, int] = field(default_factory=dict)
+    team_bid_order: list[str] = field(default_factory=list)
+    team_turn_index: int = 0
+    bidding_stage: str = "estimates"
+    chat_messages: list[dict] = field(default_factory=list)
     deck_count: int = 2
     players: list[Player] = field(default_factory=list)
     phase: GamePhase = "lobby"
