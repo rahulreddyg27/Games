@@ -432,7 +432,7 @@ function Game({
   }
 
   return (
-    <main className={`game-shell phase-${state.phase}`}>
+    <main className={`game-shell phase-${state.phase} ${showChat ? 'chat-is-open' : ''}`}>
       <header className="game-header">
         <div>
           <p className="eyebrow">ROOM {state.code}</p>
@@ -500,6 +500,11 @@ function Game({
         </section>
       )}
       {showChat && <ChatPanel state={state} playerId={playerId} send={send} onClose={() => setShowChat(false)} />}
+      {!showChat && (
+        <button type="button" className="chat-edge-tab" onClick={() => setShowChat(true)} aria-label="Open side chat">
+          <MessageCircle size={18} /><span>Chat</span>{unreadMessages > 0 && <small>{unreadMessages}</small>}
+        </button>
+      )}
     </main>
   )
 }
@@ -896,8 +901,11 @@ function Scoreboard({ state }: { state: RoomState }) {
 
 function ChatPanel({ state, playerId, send, onClose }: { state: RoomState; playerId: string; send: (payload: Record<string, unknown>) => void; onClose: () => void }) {
   const [message, setMessage] = useState('')
-  const endRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), [state.chatMessages.length])
+  const messagesRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const messages = messagesRef.current
+    if (messages) messages.scrollTop = messages.scrollHeight
+  }, [state.chatMessages.length])
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const clean = message.trim()
@@ -905,17 +913,14 @@ function ChatPanel({ state, playerId, send, onClose }: { state: RoomState; playe
     send({ action: 'send_chat', message: clean })
     setMessage('')
   }
-  return <div className="chat-backdrop" onClick={onClose}>
-    <aside className="chat-panel" onClick={(event) => event.stopPropagation()}>
-      <header><div><strong>Game chat</strong><span>Visible to every player in this room</span></div><button className="icon-button" onClick={onClose}><X size={18} /></button></header>
-      <div className="chat-messages">
+  return <aside className="chat-panel" aria-label="Side chat">
+      <header><div><strong>Side chat</strong><span>Visible to everyone · game remains active</span></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close side chat"><X size={18} /></button></header>
+      <div className="chat-messages" ref={messagesRef}>
         {state.chatMessages.length === 0 && <p className="waiting">No messages yet. Start the conversation.</p>}
         {state.chatMessages.map((item) => <div key={item.id} className={`chat-message ${item.playerId === playerId ? 'mine' : ''}`}><small>{item.playerName}{item.team ? ` · Team ${item.team}` : ''}</small><p>{item.message}</p></div>)}
-        <div ref={endRef} />
       </div>
       <form onSubmit={submit}><input maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Message everyone…" /><button className="primary" type="submit" disabled={!message.trim()}><Send size={17} /></button></form>
     </aside>
-  </div>
 }
 
 function formatSigned(value: number) {
