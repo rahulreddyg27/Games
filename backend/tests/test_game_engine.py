@@ -1,4 +1,5 @@
 import random
+import time
 
 import pytest
 
@@ -6,6 +7,7 @@ from app.game_engine import (
     advance_bots,
     begin_bid_edit,
     cancel_bid_edit,
+    confirm_final_bid_and_start,
     build_shoe,
     cut_deck,
     determine_trick_winner,
@@ -245,7 +247,55 @@ def test_open_bid_editor_blocks_next_bid_until_cancelled():
 
     cancel_bid_edit(room, "p1")
     submit_bid(room, "p2", 1)
+    assert room.phase == "bid_review"
+
+
+def test_bid_edit_time_is_cumulative_while_editor_is_open():
+    players = [Player(id="p1", name="First", seat=0), Player(id="p2", name="Second", seat=1)]
+    room = GameRoom(code="BUDGET", host_player_id="p1", max_players=2, mode="individual", players=players)
+    room.phase = "bidding"
+    room.round_number = 3
+    room.turn_seat = 0
+    room.bid_edit_remaining_seconds = {"p1": 60.0, "p2": 60.0}
+
+    submit_bid(room, "p1", 1)
+    begin_bid_edit(room, "p1")
+    room.bid_edit_deadline = time.time() + 29.0
+    cancel_bid_edit(room, "p1")
+
+    assert room.bid_edit_remaining_seconds["p1"] == pytest.approx(29.0, abs=0.1)
+    begin_bid_edit(room, "p1")
+    assert room.bid_edit_deadline - time.time() == pytest.approx(29.0, abs=0.1)
+
+
+def test_bid_edit_time_resets_for_each_round():
+    players = [Player(id="p1", name="First", seat=0), Player(id="p2", name="Second", seat=1)]
+    room = GameRoom(code="RESET", host_player_id="p1", max_players=2, mode="individual", players=players)
+    room.bid_edit_remaining_seconds = {"p1": 12.0, "p2": 0.0}
+
+    start_round(room, 2, random.Random(7))
+
+    assert room.bid_edit_remaining_seconds == {"p1": 60.0, "p2": 60.0}
+
+
+def test_last_individual_bid_waits_for_confirmation_before_playing():
+    players = [Player(id="p1", name="First", seat=0), Player(id="p2", name="Last", seat=1)]
+    room = GameRoom(code="FINAL", host_player_id="p1", max_players=2, mode="individual", players=players)
+    room.phase = "bidding"
+    room.round_number = 2
+    room.turn_seat = 0
+    room.leader_seat = 0
+
+    submit_bid(room, "p1", 1)
+    submit_bid(room, "p2", 1)
+
+    assert room.phase == "bid_review"
+    assert room.final_bid_review_player_id == "p2"
+    begin_bid_edit(room, "p2")
+    update_bid(room, "p2", 2)
+    confirm_final_bid_and_start(room, "p2")
     assert room.phase == "playing"
+    assert room.final_bid_review_player_id is None
 
 
 def test_team_round_scores_once_per_team_and_keeps_player_tricks():

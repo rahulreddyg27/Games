@@ -59,8 +59,11 @@ export type RoomState = {
   bidEditingPlayerId: string | null
   bidEditingKind: 'estimate' | 'team' | null
   bidEditDeadline: number | null
+  bidEditRemainingSeconds: number
+  finalBidReviewPlayerId: string | null
+  finalBidReviewDeadline: number | null
   mode: 'individual' | 'teams'
-  phase: 'lobby' | 'drawing' | 'draw_complete' | 'cutting' | 'bidding' | 'playing' | 'round_complete' | 'finished'
+  phase: 'lobby' | 'drawing' | 'draw_complete' | 'cutting' | 'bidding' | 'bid_review' | 'playing' | 'round_complete' | 'finished'
   roundNumber: number
   leaderSeat: number
   message: string

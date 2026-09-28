@@ -1,6 +1,6 @@
 import random
 
-from app.game_engine import continue_after_trick, cut_deck, legal_card_ids, next_round, play_card, start_game, submit_bid
+from app.game_engine import confirm_final_bid_and_start, continue_after_trick, cut_deck, legal_card_ids, next_round, play_card, start_game, submit_bid
 from app.models import GameRoom, Player
 
 
@@ -26,6 +26,9 @@ def test_full_eight_player_thirteen_round_game_completes():
         while room.phase == "bidding":
             player = room.player_by_seat(room.turn_seat)
             submit_bid(room, player.id, min(player.seat % 3, round_no))
+
+        if room.phase == "bid_review":
+            confirm_final_bid_and_start(room, room.final_bid_review_player_id)
 
         while room.phase == "playing":
             current = room.player_by_seat(room.turn_seat)

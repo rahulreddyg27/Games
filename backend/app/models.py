@@ -5,7 +5,7 @@ from typing import Literal
 
 Suit = Literal["clubs", "diamonds", "hearts", "spades"]
 GameMode = Literal["individual", "teams"]
-GamePhase = Literal["lobby", "drawing", "draw_complete", "cutting", "bidding", "playing", "round_complete", "finished"]
+GamePhase = Literal["lobby", "drawing", "draw_complete", "cutting", "bidding", "bid_review", "playing", "round_complete", "finished"]
 
 SUIT_SYMBOLS = {
     "clubs": "♣",
@@ -100,6 +100,9 @@ class GameRoom:
     bid_editing_player_id: str | None = None
     bid_editing_kind: str | None = None
     bid_edit_deadline: float | None = None
+    bid_edit_remaining_seconds: dict[str, float] = field(default_factory=dict)
+    final_bid_review_player_id: str | None = None
+    final_bid_review_deadline: float | None = None
     chat_messages: list[dict] = field(default_factory=list)
     deck_count: int = 2
     players: list[Player] = field(default_factory=list)
