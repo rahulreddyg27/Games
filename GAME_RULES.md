@@ -12,8 +12,10 @@ These are the current code-level rules. They are intentionally isolated in `back
 
 ## Decks
 
-- 4 players → 1 standard 52-card deck + 1 Joker.
-- 5–8 players → 2 standard 52-card decks + 1 Joker.
+- 2–3 players → host chooses 1 or 2 standard decks + 1 Joker.
+- 4–7 players → 2 standard 52-card decks + 1 Joker.
+- 8–12 players → 3 standard 52-card decks + 1 Joker.
+- 13–16 players → 4 standard 52-card decks + 1 Joker.
 - Cards are shuffled every round.
 - Only the number of cards needed for that round is dealt; remaining cards stay undealt.
 

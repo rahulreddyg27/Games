@@ -4,12 +4,16 @@ A local-first multiplayer implementation of the custom Spades game described in 
 
 ## Implemented rules
 
-- 2–8 players, with computer players filling empty seats when the host starts.
+- 2–16 players, with computer players filling empty seats when the host starts.
 - 13 rounds.
 - Round 1 deals 1 card/player, Round 2 deals 2, ... Round 13 deals 13.
-- Games use 2 standard decks + 1 Joker by default.
-- Rooms with 2–4 players can choose 1 deck (53 cards including Joker) or 2 decks (105 cards including Joker).
-- Rooms with 5–8 players always use 2 decks + 1 Joker.
+- Rooms with 2–3 players can choose 1 deck (53 cards including Joker) or 2 decks (105 cards including Joker).
+- Rooms with 4–7 players always use 2 decks + 1 Joker.
+- Rooms with 8–12 players always use 3 decks + 1 Joker (157 cards).
+- Rooms with 13–16 players always use 4 decks + 1 Joker (209 cards).
+- Before every round, the designated cutter cuts the shuffled shoe before the dealer deals.
+- Up to 105 cut positions appear as facedown cards; positions above 105 appear in a dropdown.
+- Cards are dealt one at a time beginning with that round's rotating first recipient.
 - Exactly **one Joker** is added to the shoe.
 - Before Round 1, each player picks one unique facedown card from a separate 52-card deck (no Joker).
 - Drawn cards are ranked highest to lowest by rank; suit is considered only for equal ranks, using ♠, ♥, ♦, ♣ from highest to lowest.
@@ -69,6 +73,12 @@ Open:
 ```text
 http://localhost:5173
 ```
+
+### Admin game cleanup
+
+Open the **Admin** screen from the home page and enter the temporary admin key `Qwerty@123` to list or delete active in-memory rooms and completed SQLite snapshots. This key is hardcoded in the backend for early testing and must be replaced with secret-based configuration before wider use.
+
+The current admin list is instance-local: Azure restarts remove in-memory games and ephemeral SQLite data, and multiple replicas do not share a game list.
 
 The API runs on:
 
@@ -138,10 +148,13 @@ Included:
 - Solo play against computer players.
 - Join by room code.
 - Host start control.
-- Individual or two-team mode.
+- Individual mode or evenly divided multi-team mode with host-controlled lobby assignment and locking.
 - Automatic card dealing by round.
 - Hidden bidding until everyone bids.
 - Server-authoritative card validation.
+- Player-controlled deck cutting before every round.
+- Team-aware seating that separates teammates and preserves the strongest draw as the last bidder.
+- Continuous bidding rotation anchored backward from Round 13, with no final-round reset.
 - Follow-suit validation.
 - Spade trump logic.
 - Wild Joker logic.
@@ -152,7 +165,7 @@ Included:
 - Final individual/team ranking.
 - WebSocket live synchronization.
 - Browser refresh/reconnect using local session data.
-- Case-insensitive unique player names within a room and private 6-digit rejoin PINs.
+- Case-insensitive unique player names within a room and one shared private 6-digit rejoin PIN per game.
 - Host-controlled room closure that removes active memory and completed SQLite data.
 
 Not yet included (good next phase):
@@ -161,11 +174,13 @@ Not yet included (good next phase):
 - Cloud deployment.
 - Voice/video chat.
 - Spectators.
-- Custom team assignment UI.
+- Team bidding rules beyond host-controlled lobby assignment and balanced automatic assignment.
 - Animations/sounds.
 - Native App Store app/PWA install flow.
 - Timers/AFK handling.
 - Production-grade distributed game-state storage.
+- Round 13 strategy suggestions (tracked in `TODO.md`).
+- Combined team bidding (tracked in `TODO.md`; final captain/visibility rules pending).
 
 ## Important design choice
 

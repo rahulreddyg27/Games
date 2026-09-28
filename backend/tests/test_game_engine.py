@@ -1,14 +1,27 @@
 import random
+import time
+
+import pytest
 
 from app.game_engine import (
     advance_bots,
+    begin_bid_edit,
+    cancel_bid_edit,
+    confirm_final_bid_and_start,
     build_shoe,
+    cut_deck,
     determine_trick_winner,
     legal_card_ids,
     score_round,
+    finish_round,
+    initialize_team_game,
     start_card_draw,
     start_game,
+    start_round,
     submit_bid,
+    submit_team_bid,
+    update_bid,
+    update_team_bid,
     pick_draw_card,
 )
 from app.models import Card, GameRoom, Player, TrickPlay
@@ -40,6 +53,18 @@ def test_configured_one_and_two_deck_shoes_include_one_joker():
     assert len(two_decks) == 105
     assert sum(card.is_joker for card in one_deck) == 1
     assert sum(card.is_joker for card in two_decks) == 1
+
+
+def test_three_deck_shoe_has_157_cards_and_one_joker():
+    shoe = build_shoe(8, random.Random(1), deck_count=3)
+    assert len(shoe) == 157
+    assert sum(card.is_joker for card in shoe) == 1
+
+
+def test_four_deck_shoe_supports_sixteen_players():
+    shoe = build_shoe(16, random.Random(1), deck_count=4)
+    assert len(shoe) == 209
+    assert sum(card.is_joker for card in shoe) == 1
 
 
 def test_score_made_bid_and_bags():
@@ -102,6 +127,202 @@ def test_five_bags_apply_minus_50_and_reset_bags():
     assert p.total_bags == 5
 
 
+def test_team_estimates_are_followed_by_captain_combined_bids():
+    players = [
+        Player(id="a1", name="A1", seat=0, team="A", draw_card=card("a1d", "hearts", 4)),
+        Player(id="b1", name="B1", seat=1, team="B", draw_card=card("b1d", "clubs", 5)),
+        Player(id="a2", name="A2", seat=2, team="A", draw_card=card("a2d", "spades", 12)),
+        Player(id="b2", name="B2", seat=3, team="B", draw_card=card("b2d", "diamonds", 13)),
+    ]
+    room = GameRoom(code="TEAMB", host_player_id="a1", max_players=4, mode="teams", team_count=2, players=players)
+    initialize_team_game(room)
+    room.phase = "bidding"
+    room.round_number = 3
+    room.turn_seat = 0
+    room.leader_seat = 0
+    room.team_bid_order = ["A", "B"]
+    room.team_bids = {"A": None, "B": None}
+
+    submit_bid(room, "a1", 1.5)
+    submit_bid(room, "a2", 2)
+    assert room.bidding_stage == "teams"
+    assert room.team_captains == {"A": "a2", "B": "b2"}
+    assert [player.bid for player in players] == [1.5, None, 2, None]
+    with pytest.raises(ValueError, match="captain A2"):
+        submit_team_bid(room, "a1", 2)
+    submit_team_bid(room, "a2", 3)
+    assert room.bidding_stage == "estimates"
+    assert room.team_bids == {"A": 3, "B": None}
+    submit_bid(room, "b1", 0)
+    submit_bid(room, "b2", 1)
+    assert room.bidding_stage == "teams"
+    submit_team_bid(room, "b2", 1)
+    assert room.phase == "playing"
+    assert room.team_bids == {"A": 3, "B": 1}
+
+
+def test_individual_bid_can_only_change_before_next_submission():
+    players = [Player(id=f"p{i}", name=f"P{i}", seat=i) for i in range(3)]
+    room = GameRoom(code="EDIT1", host_player_id="p0", max_players=3, mode="individual", players=players)
+    room.phase = "bidding"
+    room.round_number = 5
+    room.turn_seat = 0
+    room.leader_seat = 0
+
+    submit_bid(room, "p0", 2)
+    begin_bid_edit(room, "p0")
+    update_bid(room, "p0", 3)
+    assert players[0].bid == 3
+
+    submit_bid(room, "p1", 1)
+    with pytest.raises(ValueError, match="next player"):
+        update_bid(room, "p0", 4)
+    begin_bid_edit(room, "p1")
+    update_bid(room, "p1", 2)
+    assert players[1].bid == 2
+
+
+def test_team_estimate_and_combined_bid_edit_windows_close_on_next_bid():
+    players = [
+        Player(id="a", name="A", seat=0, team="A", draw_card=card("ad", "hearts", 14)),
+        Player(id="b", name="B", seat=1, team="B", draw_card=card("bd", "spades", 13)),
+        Player(id="a2", name="A2", seat=2, team="A", draw_card=card("a2d", "clubs", 2)),
+        Player(id="b2", name="B2", seat=3, team="B", draw_card=card("b2d", "clubs", 3)),
+    ]
+    room = GameRoom(code="EDITT", host_player_id="a", max_players=4, mode="teams", team_count=2, players=players)
+    initialize_team_game(room)
+    room.phase = "bidding"
+    room.round_number = 4
+    room.turn_seat = 0
+    room.team_bid_order = ["A", "B"]
+    room.team_bids = {"A": None, "B": None}
+
+    submit_bid(room, "a", 1)
+    begin_bid_edit(room, "a")
+    update_bid(room, "a", 2)
+    submit_bid(room, "a2", 1)
+    with pytest.raises(ValueError, match="no longer open"):
+        update_bid(room, "a", 3)
+    submit_team_bid(room, "a", 2)
+    begin_bid_edit(room, "a")
+    update_team_bid(room, "a", 3)
+    assert room.team_bids["A"] == 3
+    submit_bid(room, "b", 1)
+    with pytest.raises(ValueError, match="no longer"):
+        begin_bid_edit(room, "a")
+    submit_bid(room, "b2", 0)
+    submit_team_bid(room, "b", 1)
+    assert room.phase == "playing"
+    with pytest.raises(ValueError, match="no longer open"):
+        update_team_bid(room, "a", 2)
+
+
+def test_bot_bidding_can_be_paused_for_the_correction_window():
+    human = Player(id="human", name="Human", seat=0)
+    bot = Player(id="bot", name="Computer", seat=1, is_bot=True)
+    room = GameRoom(code="DELAY", host_player_id="human", max_players=2, mode="individual", players=[human, bot])
+    room.phase = "bidding"
+    room.round_number = 3
+    room.turn_seat = 1
+    bot.hand = [card("sA", "spades", 14)]
+
+    advance_bots(room, allow_bidding=False)
+    assert bot.bid is None
+    advance_bots(room)
+    assert bot.bid == 1
+
+
+def test_open_bid_editor_blocks_next_bid_until_cancelled():
+    first = Player(id="p1", name="First", seat=0)
+    second = Player(id="p2", name="Second", seat=1)
+    room = GameRoom(code="PAUSE", host_player_id="p1", max_players=2, mode="individual", players=[first, second])
+    room.phase = "bidding"
+    room.round_number = 3
+    room.turn_seat = 0
+
+    submit_bid(room, "p1", 1)
+    begin_bid_edit(room, "p1")
+    with pytest.raises(ValueError, match="correcting their bid"):
+        submit_bid(room, "p2", 1)
+
+    cancel_bid_edit(room, "p1")
+    submit_bid(room, "p2", 1)
+    assert room.phase == "bid_review"
+
+
+def test_bid_edit_time_is_cumulative_while_editor_is_open():
+    players = [Player(id="p1", name="First", seat=0), Player(id="p2", name="Second", seat=1)]
+    room = GameRoom(code="BUDGET", host_player_id="p1", max_players=2, mode="individual", players=players)
+    room.phase = "bidding"
+    room.round_number = 3
+    room.turn_seat = 0
+    room.bid_edit_remaining_seconds = {"p1": 60.0, "p2": 60.0}
+
+    submit_bid(room, "p1", 1)
+    begin_bid_edit(room, "p1")
+    room.bid_edit_deadline = time.time() + 29.0
+    cancel_bid_edit(room, "p1")
+
+    assert room.bid_edit_remaining_seconds["p1"] == pytest.approx(29.0, abs=0.1)
+    begin_bid_edit(room, "p1")
+    assert room.bid_edit_deadline - time.time() == pytest.approx(29.0, abs=0.1)
+
+
+def test_bid_edit_time_resets_for_each_round():
+    players = [Player(id="p1", name="First", seat=0), Player(id="p2", name="Second", seat=1)]
+    room = GameRoom(code="RESET", host_player_id="p1", max_players=2, mode="individual", players=players)
+    room.bid_edit_remaining_seconds = {"p1": 12.0, "p2": 0.0}
+
+    start_round(room, 2, random.Random(7))
+
+    assert room.bid_edit_remaining_seconds == {"p1": 60.0, "p2": 60.0}
+
+
+def test_last_individual_bid_waits_for_confirmation_before_playing():
+    players = [Player(id="p1", name="First", seat=0), Player(id="p2", name="Last", seat=1)]
+    room = GameRoom(code="FINAL", host_player_id="p1", max_players=2, mode="individual", players=players)
+    room.phase = "bidding"
+    room.round_number = 2
+    room.turn_seat = 0
+    room.leader_seat = 0
+
+    submit_bid(room, "p1", 1)
+    submit_bid(room, "p2", 1)
+
+    assert room.phase == "bid_review"
+    assert room.final_bid_review_player_id == "p2"
+    begin_bid_edit(room, "p2")
+    update_bid(room, "p2", 2)
+    confirm_final_bid_and_start(room, "p2")
+    assert room.phase == "playing"
+    assert room.final_bid_review_player_id is None
+
+
+def test_team_round_scores_once_per_team_and_keeps_player_tricks():
+    players = [
+        Player(id="a1", name="A1", seat=0, team="A", tricks=2),
+        Player(id="b1", name="B1", seat=1, team="B", tricks=1),
+        Player(id="a2", name="A2", seat=2, team="A", tricks=2),
+        Player(id="b2", name="B2", seat=3, team="B", tricks=1),
+    ]
+    room = GameRoom(code="TEAMS", host_player_id="a1", max_players=4, mode="teams", team_count=2, players=players)
+    room.phase = "playing"
+    room.round_number = 4
+    room.team_bid_order = ["A", "B"]
+    room.team_bids = {"A": 3, "B": 3}
+    room.team_scores = {"A": 10, "B": 20}
+    room.team_gross_scores = {"A": 10, "B": 20}
+    room.team_bags = {"A": 4, "B": 0}
+    room.team_total_bags = {"A": 4, "B": 0}
+
+    rows = finish_round(room)
+
+    assert [(row["name"], row["won"]) for row in rows] == [("Team A", 4), ("Team B", 2)]
+    assert room.team_scores == {"A": -9, "B": -8}
+    assert room.team_bags == {"A": 0, "B": 0}
+    assert [player.tricks for player in players] == [2, 1, 2, 1]
+
+
 def test_joker_led_means_no_follow_suit_requirement():
     room, p1, _ = room_with_two_players()
     room.current_trick = [TrickPlay("p2", card("j", joker=True))]
@@ -121,6 +342,8 @@ def test_computer_bids_and_plays_until_human_turn():
     )
 
     start_game(room, random.Random(4))
+    assert room.cutter_player_id == human.id
+    cut_deck(room, human.id, 7)
     advance_bots(room)
     assert computer.bid is None
     assert room.phase == "bidding"
@@ -146,3 +369,126 @@ def test_pre_game_draw_reorders_players_lowest_to_highest():
     assert [player.id for player in room.players] == ["p1", "p2", "p0", "p3"]
     assert [player.seat for player in room.players] == [0, 1, 2, 3]
     assert len(room.draw_deck) == 48
+
+
+def test_team_draw_separates_teammates_and_keeps_strongest_draw_last():
+    players = [
+        Player(id="p1", name="P1", seat=0, team="A"),
+        Player(id="p2", name="P2", seat=1, team="B"),
+        Player(id="p3", name="P3", seat=2, team="C"),
+        Player(id="p4", name="P4", seat=3, team="C"),
+        Player(id="p5", name="P5", seat=4, team="A"),
+        Player(id="p6", name="P6", seat=5, team="B"),
+    ]
+    room = GameRoom(code="TEAM6", host_player_id="p1", max_players=6, mode="teams", team_count=3, teams_locked=True, players=players)
+    start_card_draw(room, random.Random(9))
+    chosen = [(3, "hearts"), (13, "clubs"), (4, "diamonds"), (6, "clubs"), (5, "hearts"), (7, "spades")]
+    for player, (rank, suit) in zip(players, chosen):
+        selected = next(card for card in room.draw_deck if card.rank == rank and card.suit == suit)
+        pick_draw_card(room, player.id, selected.id)
+
+    assert [player.id for player in room.players] == ["p1", "p3", "p6", "p5", "p4", "p2"]
+    teams = [player.team for player in room.players]
+    assert all(teams[index] != teams[(index + 1) % len(teams)] for index in range(len(teams)))
+    assert room.players[-1].id == "p2"
+
+
+def test_round_thirteen_has_final_seat_bid_last():
+    players = [Player(id=f"p{i}", name=f"P{i}", seat=i) for i in range(8)]
+    room = GameRoom(code="LAST8", host_player_id="p0", max_players=8, mode="individual", deck_count=2, players=players)
+
+    start_round(room, 13, random.Random(10))
+
+    assert room.leader_seat == 0
+    assert room.turn_seat == 0
+
+
+def test_round_rotation_counts_backward_from_round_thirteen_without_reset():
+    players = [Player(id=f"p{i}", name=f"P{i}", seat=i) for i in range(5)]
+    room = GameRoom(code="ROT5", host_player_id="p0", max_players=5, mode="individual", deck_count=2, players=players)
+    expected_last_seats = [3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5]
+
+    actual_last_seats = []
+    for round_number in range(1, 14):
+        start_round(room, round_number, random.Random(round_number))
+        actual_last_seats.append(((room.leader_seat - 1) % len(players)) + 1)
+
+    assert actual_last_seats == expected_last_seats
+
+
+def test_backward_anchored_rotation_generalizes_to_other_player_counts():
+    for player_count in (7, 8, 9, 16):
+        players = [Player(id=f"p{i}", name=f"P{i}", seat=i) for i in range(player_count)]
+        room = GameRoom(code=f"R{player_count}", host_player_id="p0", max_players=player_count, mode="individual", deck_count=4, players=players)
+        last_seats = []
+        for round_number in range(1, 14):
+            start_round(room, round_number, random.Random(round_number))
+            last_seats.append(((room.leader_seat - 1) % player_count) + 1)
+
+        assert last_seats[-3:] == [player_count - 2, player_count - 1, player_count]
+        assert all(current == (previous % player_count) + 1 for previous, current in zip(last_seats, last_seats[1:]))
+
+
+@pytest.mark.parametrize("player_count", range(2, 17))
+def test_every_supported_player_count_has_continuous_round_rotation(player_count):
+    players = [Player(id=f"p{i}", name=f"P{i}", seat=i) for i in range(player_count)]
+    room = GameRoom(code=f"ALL{player_count}", host_player_id="p0", max_players=player_count, mode="individual", deck_count=4, players=players)
+    last_seats = []
+
+    for round_number in range(1, 14):
+        start_round(room, round_number, random.Random(round_number))
+        last_seats.append(((room.leader_seat - 1) % player_count) + 1)
+
+    assert last_seats[-1] == player_count
+    assert all(current == (previous % player_count) + 1 for previous, current in zip(last_seats, last_seats[1:]))
+
+
+@pytest.mark.parametrize(
+    ("player_count", "team_count"),
+    [(4, 2), (6, 2), (6, 3), (8, 2), (8, 4), (9, 3), (10, 2), (10, 5),
+     (12, 2), (12, 3), (12, 4), (12, 6), (14, 2), (14, 7), (15, 3), (15, 5),
+     (16, 2), (16, 4), (16, 8)],
+)
+def test_every_valid_team_configuration_separates_teammates(player_count, team_count):
+    players = [
+        Player(id=f"p{i}", name=f"P{i}", seat=i, team=chr(65 + (i % team_count)))
+        for i in range(player_count)
+    ]
+    room = GameRoom(
+        code=f"T{player_count}{team_count}",
+        host_player_id="p0",
+        max_players=player_count,
+        mode="teams",
+        team_count=team_count,
+        teams_locked=True,
+        players=players,
+    )
+    start_card_draw(room, random.Random(player_count * 10 + team_count))
+    available = sorted(
+        room.draw_deck,
+        key=lambda draw: (int(draw.rank or 0), {"clubs": 0, "diamonds": 1, "hearts": 2, "spades": 3}[str(draw.suit)]),
+    )
+    for player, selected in zip(players, available):
+        pick_draw_card(room, player.id, selected.id)
+
+    teams = [player.team for player in room.players]
+    assert all(teams[index] != teams[(index + 1) % len(teams)] for index in range(len(teams)))
+    strongest_player = max(players, key=lambda player: (int(player.draw_card.rank or 0), {"clubs": 0, "diamonds": 1, "hearts": 2, "spades": 3}[str(player.draw_card.suit)]))
+    assert room.players[-1].id == strongest_player.id
+
+
+def test_cut_rotates_deck_and_deals_from_designated_first_recipient():
+    players = [Player(id=f"p{i}", name=f"P{i + 1}", seat=i) for i in range(5)]
+    room = GameRoom(code="CUT01", host_player_id="p0", max_players=5, mode="individual", players=players)
+    room.phase = "cutting"
+    room.round_number = 1
+    room.leader_seat = 3
+    room.turn_seat = 3
+    room.dealer_player_id = "p2"
+    room.cutter_player_id = "p1"
+    room.pending_shoe = [card(f"c{i}", "clubs", i + 2) for i in range(10)]
+
+    cut_deck(room, "p1", 2)
+
+    assert room.phase == "bidding"
+    assert [players[index].hand[0].id for index in (3, 4, 0, 1, 2)] == ["c2", "c3", "c4", "c5", "c6"]
