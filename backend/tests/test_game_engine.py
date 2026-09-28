@@ -4,6 +4,8 @@ import pytest
 
 from app.game_engine import (
     advance_bots,
+    begin_bid_edit,
+    cancel_bid_edit,
     build_shoe,
     cut_deck,
     determine_trick_winner,
@@ -16,6 +18,8 @@ from app.game_engine import (
     start_round,
     submit_bid,
     submit_team_bid,
+    update_bid,
+    update_team_bid,
     pick_draw_card,
 )
 from app.models import Card, GameRoom, Player, TrickPlay
@@ -137,18 +141,111 @@ def test_team_estimates_are_followed_by_captain_combined_bids():
     room.team_bid_order = ["A", "B"]
     room.team_bids = {"A": None, "B": None}
 
-    for player, estimate in zip(players, [1, 0, 2, 1]):
-        submit_bid(room, player.id, estimate)
-
+    submit_bid(room, "a1", 1.5)
+    submit_bid(room, "a2", 2)
     assert room.bidding_stage == "teams"
     assert room.team_captains == {"A": "a2", "B": "b2"}
-    assert [player.bid for player in players] == [1, 0, 2, 1]
+    assert [player.bid for player in players] == [1.5, None, 2, None]
     with pytest.raises(ValueError, match="captain A2"):
         submit_team_bid(room, "a1", 2)
-    submit_team_bid(room, "a2", 2)
+    submit_team_bid(room, "a2", 3)
+    assert room.bidding_stage == "estimates"
+    assert room.team_bids == {"A": 3, "B": None}
+    submit_bid(room, "b1", 0)
+    submit_bid(room, "b2", 1)
+    assert room.bidding_stage == "teams"
     submit_team_bid(room, "b2", 1)
     assert room.phase == "playing"
-    assert room.team_bids == {"A": 2, "B": 1}
+    assert room.team_bids == {"A": 3, "B": 1}
+
+
+def test_individual_bid_can_only_change_before_next_submission():
+    players = [Player(id=f"p{i}", name=f"P{i}", seat=i) for i in range(3)]
+    room = GameRoom(code="EDIT1", host_player_id="p0", max_players=3, mode="individual", players=players)
+    room.phase = "bidding"
+    room.round_number = 5
+    room.turn_seat = 0
+    room.leader_seat = 0
+
+    submit_bid(room, "p0", 2)
+    begin_bid_edit(room, "p0")
+    update_bid(room, "p0", 3)
+    assert players[0].bid == 3
+
+    submit_bid(room, "p1", 1)
+    with pytest.raises(ValueError, match="next player"):
+        update_bid(room, "p0", 4)
+    begin_bid_edit(room, "p1")
+    update_bid(room, "p1", 2)
+    assert players[1].bid == 2
+
+
+def test_team_estimate_and_combined_bid_edit_windows_close_on_next_bid():
+    players = [
+        Player(id="a", name="A", seat=0, team="A", draw_card=card("ad", "hearts", 14)),
+        Player(id="b", name="B", seat=1, team="B", draw_card=card("bd", "spades", 13)),
+        Player(id="a2", name="A2", seat=2, team="A", draw_card=card("a2d", "clubs", 2)),
+        Player(id="b2", name="B2", seat=3, team="B", draw_card=card("b2d", "clubs", 3)),
+    ]
+    room = GameRoom(code="EDITT", host_player_id="a", max_players=4, mode="teams", team_count=2, players=players)
+    initialize_team_game(room)
+    room.phase = "bidding"
+    room.round_number = 4
+    room.turn_seat = 0
+    room.team_bid_order = ["A", "B"]
+    room.team_bids = {"A": None, "B": None}
+
+    submit_bid(room, "a", 1)
+    begin_bid_edit(room, "a")
+    update_bid(room, "a", 2)
+    submit_bid(room, "a2", 1)
+    with pytest.raises(ValueError, match="no longer open"):
+        update_bid(room, "a", 3)
+    submit_team_bid(room, "a", 2)
+    begin_bid_edit(room, "a")
+    update_team_bid(room, "a", 3)
+    assert room.team_bids["A"] == 3
+    submit_bid(room, "b", 1)
+    with pytest.raises(ValueError, match="no longer"):
+        begin_bid_edit(room, "a")
+    submit_bid(room, "b2", 0)
+    submit_team_bid(room, "b", 1)
+    assert room.phase == "playing"
+    with pytest.raises(ValueError, match="no longer open"):
+        update_team_bid(room, "a", 2)
+
+
+def test_bot_bidding_can_be_paused_for_the_correction_window():
+    human = Player(id="human", name="Human", seat=0)
+    bot = Player(id="bot", name="Computer", seat=1, is_bot=True)
+    room = GameRoom(code="DELAY", host_player_id="human", max_players=2, mode="individual", players=[human, bot])
+    room.phase = "bidding"
+    room.round_number = 3
+    room.turn_seat = 1
+    bot.hand = [card("sA", "spades", 14)]
+
+    advance_bots(room, allow_bidding=False)
+    assert bot.bid is None
+    advance_bots(room)
+    assert bot.bid == 1
+
+
+def test_open_bid_editor_blocks_next_bid_until_cancelled():
+    first = Player(id="p1", name="First", seat=0)
+    second = Player(id="p2", name="Second", seat=1)
+    room = GameRoom(code="PAUSE", host_player_id="p1", max_players=2, mode="individual", players=[first, second])
+    room.phase = "bidding"
+    room.round_number = 3
+    room.turn_seat = 0
+
+    submit_bid(room, "p1", 1)
+    begin_bid_edit(room, "p1")
+    with pytest.raises(ValueError, match="correcting their bid"):
+        submit_bid(room, "p2", 1)
+
+    cancel_bid_edit(room, "p1")
+    submit_bid(room, "p2", 1)
+    assert room.phase == "playing"
 
 
 def test_team_round_scores_once_per_team_and_keeps_player_tricks():

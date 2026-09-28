@@ -159,15 +159,15 @@ def bot_card_id(room: GameRoom, player_id: str) -> str:
     return cards[0].id
 
 
-def advance_bots(room: GameRoom) -> None:
+def advance_bots(room: GameRoom, allow_bidding: bool = True) -> None:
     """Advance automatic bidding and card play until a human decision is needed."""
-    while room.phase == "bidding" and (room.mode != "teams" or room.bidding_stage == "estimates"):
+    while allow_bidding and room.phase == "bidding" and (room.mode != "teams" or room.bidding_stage == "estimates"):
         player = room.player_by_seat(room.turn_seat)
         if not player.is_bot:
             break
         submit_bid(room, player.id, bot_bid(room, player.id))
 
-    while room.phase == "bidding" and room.mode == "teams" and room.bidding_stage == "teams":
+    while allow_bidding and room.phase == "bidding" and room.mode == "teams" and room.bidding_stage == "teams":
         team = room.team_bid_order[room.team_turn_index]
         captain = room.player_by_id(room.team_captains[team])
         if not captain.is_bot:
@@ -192,6 +192,11 @@ def start_round(room: GameRoom, round_number: int, rng: random.Random | None = N
     room.awaiting_next_trick = False
     room.last_trick_winner_id = None
     room.last_trick_cards = []
+    room.editable_bid_player_id = None
+    room.editable_team = None
+    room.bid_editing_player_id = None
+    room.bid_editing_kind = None
+    room.bid_edit_deadline = None
 
     shoe = build_shoe(len(room.players), rng, room.deck_count)
     needed = len(room.players) * round_number
@@ -262,8 +267,13 @@ def deal_pending_shoe(room: GameRoom) -> None:
 
     room.pending_shoe = []
     room.phase = "bidding"
-    room.turn_seat = room.leader_seat
-    room.message = f"Round {room.round_number}: submit your {'public estimate' if room.mode == 'teams' else 'Guess'}"
+    if room.mode == "teams":
+        active_team = room.team_bid_order[0]
+        room.turn_seat = first_unsubmitted_team_member_seat(room, active_team)
+        room.message = f"Round {room.round_number}: Team {active_team} submits public estimates first"
+    else:
+        room.turn_seat = room.leader_seat
+        room.message = f"Round {room.round_number}: submit your Guess"
 
 
 def advance_bot_cut(room: GameRoom) -> None:
@@ -274,29 +284,66 @@ def advance_bot_cut(room: GameRoom) -> None:
         cut_deck(room, cutter.id, random.randint(1, len(room.pending_shoe)))
 
 
-def submit_bid(room: GameRoom, player_id: str, bid: int) -> None:
+def circular_players_from_leader(room: GameRoom) -> list[Player]:
+    return [room.player_by_seat((room.leader_seat + offset) % len(room.players)) for offset in range(len(room.players))]
+
+
+def first_unsubmitted_team_member_seat(room: GameRoom, team: str) -> int:
+    player = next((member for member in circular_players_from_leader(room) if member.team == team and member.bid is None), None)
+    if player is None:
+        raise GameRuleError(f"Team {team} has no estimate waiting")
+    return player.seat
+
+
+def validate_player_bid(room: GameRoom, bid: float) -> None:
+    if bid < 0 or bid > room.round_number:
+        raise GameRuleError(f"Guess must be between 0 and {room.round_number}")
+    if room.mode == "teams":
+        if not float(bid * 2).is_integer():
+            raise GameRuleError("Team estimates must use whole or half values")
+    elif not float(bid).is_integer():
+        raise GameRuleError("Individual guesses must be whole numbers")
+
+
+def submit_bid(room: GameRoom, player_id: str, bid: float) -> None:
     if room.phase != "bidding":
         raise GameRuleError("Bidding is not open")
+    if room.bid_editing_player_id is not None:
+        editor = room.player_by_id(room.bid_editing_player_id)
+        raise GameRuleError(f"{editor.name} is correcting their bid. Please wait.")
     player = room.player_by_id(player_id)
     if player.seat != room.turn_seat:
         raise GameRuleError(f"Waiting for {room.player_by_seat(room.turn_seat).name} to submit a Guess")
     if player.bid is not None:
         raise GameRuleError("Your estimate has already been submitted" if room.mode == "teams" else "Your Guess has already been submitted")
-    if bid < 0 or bid > room.round_number:
-        raise GameRuleError(f"Guess must be between 0 and {room.round_number}")
+    validate_player_bid(room, bid)
+    if room.mode == "teams":
+        active_team = room.team_bid_order[room.team_turn_index]
+        if player.team != active_team:
+            raise GameRuleError(f"Team {active_team} must finish its estimates first")
+        # Acceptance of the next team's first estimate permanently closes the
+        # preceding team's final-bid edit window.
+        room.editable_team = None
     player.bid = bid
+    room.editable_bid_player_id = player.id
 
-    if all(p.bid is not None for p in room.players):
-        if room.mode == "teams":
+    if room.mode == "teams":
+        active_team = room.team_bid_order[room.team_turn_index]
+        waiting = [member for member in room.players if member.team == active_team and member.bid is None]
+        if not waiting:
+            room.editable_bid_player_id = None
             room.bidding_stage = "teams"
-            room.team_turn_index = 0
-            team = room.team_bid_order[0]
-            captain = room.player_by_id(room.team_captains[team])
-            room.message = f"All estimates are visible. Team {team} captain {captain.name} submits the combined bid."
+            captain = room.player_by_id(room.team_captains[active_team])
+            estimate = sum(float(member.bid or 0) for member in room.players if member.team == active_team)
+            room.message = f"Team {active_team} estimate total is {estimate:g}. Captain {captain.name} locks the final bid."
         else:
-            room.phase = "playing"
-            room.turn_seat = room.leader_seat
-            room.message = f"All guesses are in. {room.player_by_seat(room.turn_seat).name} leads."
+            room.turn_seat = first_unsubmitted_team_member_seat(room, active_team)
+            room.message = f"Team {active_team}: waiting for {room.player_by_seat(room.turn_seat).name}'s public estimate"
+    elif all(p.bid is not None for p in room.players):
+        room.editable_bid_player_id = None
+        room.phase = "playing"
+        room.turn_seat = room.leader_seat
+        room.message = f"All guesses are in. {room.player_by_seat(room.turn_seat).name} leads."
     else:
         next_seat = (room.turn_seat + 1) % len(room.players)
         while room.player_by_seat(next_seat).bid is not None:
@@ -305,9 +352,28 @@ def submit_bid(room: GameRoom, player_id: str, bid: int) -> None:
         room.message = f"Waiting for {room.player_by_seat(room.turn_seat).name} to submit a Guess"
 
 
+def update_bid(room: GameRoom, player_id: str, bid: float) -> None:
+    if room.phase != "bidding" or (room.mode == "teams" and room.bidding_stage != "estimates"):
+        raise GameRuleError("Estimate editing is no longer open")
+    if room.editable_bid_player_id != player_id:
+        raise GameRuleError("Your bid is locked because the next player has already submitted")
+    if room.bid_editing_player_id != player_id or room.bid_editing_kind != "estimate":
+        raise GameRuleError("Open the bid editor before updating your bid")
+    player = room.player_by_id(player_id)
+    if player.bid is None:
+        raise GameRuleError("Submit your bid before trying to update it")
+    validate_player_bid(room, bid)
+    player.bid = bid
+    clear_bid_edit(room)
+    room.message = f"{player.name} corrected their {'public estimate' if room.mode == 'teams' else 'Guess'} to {bid}"
+
+
 def submit_team_bid(room: GameRoom, player_id: str, bid: int) -> None:
     if room.phase != "bidding" or room.mode != "teams" or room.bidding_stage != "teams":
         raise GameRuleError("Combined team bidding is not open")
+    if room.bid_editing_player_id is not None:
+        editor = room.player_by_id(room.bid_editing_player_id)
+        raise GameRuleError(f"{editor.name} is correcting their team bid. Please wait.")
     team = room.team_bid_order[room.team_turn_index]
     if room.team_captains.get(team) != player_id:
         captain = room.player_by_id(room.team_captains[team])
@@ -315,15 +381,65 @@ def submit_team_bid(room: GameRoom, player_id: str, bid: int) -> None:
     if bid < 0 or bid > room.round_number:
         raise GameRuleError(f"Team bid must be between 0 and {room.round_number}")
     room.team_bids[team] = bid
+    room.editable_team = team
     room.team_turn_index += 1
     if room.team_turn_index >= len(room.team_bid_order):
+        room.editable_team = None
         room.phase = "playing"
         room.turn_seat = room.leader_seat
         room.message = f"All team bids are locked. {room.player_by_seat(room.turn_seat).name} leads."
     else:
         next_team = room.team_bid_order[room.team_turn_index]
-        captain = room.player_by_id(room.team_captains[next_team])
-        room.message = f"Team {next_team} captain {captain.name} submits the combined bid."
+        room.bidding_stage = "estimates"
+        room.turn_seat = first_unsubmitted_team_member_seat(room, next_team)
+        room.message = f"Team {team} locked {bid}. Team {next_team} now submits public estimates."
+
+
+def update_team_bid(room: GameRoom, player_id: str, bid: int) -> None:
+    if room.phase != "bidding" or room.mode != "teams":
+        raise GameRuleError("Combined team bid editing is no longer open")
+    team = room.editable_team
+    if team is None or room.team_captains.get(team) != player_id:
+        raise GameRuleError("Your team bid is locked because the next team has already submitted")
+    if room.bid_editing_player_id != player_id or room.bid_editing_kind != "team":
+        raise GameRuleError("Open the team bid editor before updating the bid")
+    if bid < 0 or bid > room.round_number:
+        raise GameRuleError(f"Team bid must be between 0 and {room.round_number}")
+    room.team_bids[team] = bid
+    captain = room.player_by_id(player_id)
+    clear_bid_edit(room)
+    room.message = f"Team {team} captain {captain.name} corrected the combined bid to {bid}"
+
+
+def begin_bid_edit(room: GameRoom, player_id: str) -> str:
+    if room.phase != "bidding":
+        raise GameRuleError("Bid editing is no longer available")
+    if room.bid_editing_player_id is not None:
+        editor = room.player_by_id(room.bid_editing_player_id)
+        raise GameRuleError(f"{editor.name} is already correcting a bid")
+    if room.mode == "teams" and room.editable_team is not None and room.team_captains.get(room.editable_team) == player_id:
+        kind = "team"
+    else:
+        if room.editable_bid_player_id != player_id:
+            raise GameRuleError("Your bid can no longer be changed")
+        kind = "estimate"
+    room.bid_editing_player_id = player_id
+    room.bid_editing_kind = kind
+    return kind
+
+
+def clear_bid_edit(room: GameRoom) -> None:
+    room.bid_editing_player_id = None
+    room.bid_editing_kind = None
+    room.bid_edit_deadline = None
+
+
+def cancel_bid_edit(room: GameRoom, player_id: str) -> None:
+    if room.bid_editing_player_id != player_id:
+        raise GameRuleError("You are not currently editing a bid")
+    player = room.player_by_id(player_id)
+    clear_bid_edit(room)
+    room.message = f"{player.name} kept their original bid"
 
 
 def card_sort_key(card: Card) -> tuple[int, int, int]:
@@ -543,6 +659,7 @@ def team_totals(room: GameRoom) -> list[dict]:
         {"team": team, "score": score, "grossScore": room.team_gross_scores.get(team, 0),
          "bags": room.team_bags.get(team, 0), "totalBags": room.team_total_bags.get(team, 0),
          "bid": room.team_bids.get(team),
+         "estimateTotal": sum(float(player.bid or 0) for player in room.players if player.team == team),
          "tricks": sum(player.tricks for player in room.players if player.team == team),
          "captainId": room.team_captains.get(team)}
         for team, score in sorted(room.team_scores.items(), key=lambda item: item[1], reverse=True)
