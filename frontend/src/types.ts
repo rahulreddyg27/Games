@@ -53,6 +53,12 @@ export type RoomState = {
   teamsLocked: boolean
   biddingStage: 'estimates' | 'teams'
   teamBidOrder: string[]
+  activeBiddingTeam: string | null
+  editableBidPlayerId: string | null
+  editableTeam: string | null
+  bidEditingPlayerId: string | null
+  bidEditingKind: 'estimate' | 'team' | null
+  bidEditDeadline: number | null
   mode: 'individual' | 'teams'
   phase: 'lobby' | 'drawing' | 'draw_complete' | 'cutting' | 'bidding' | 'playing' | 'round_complete' | 'finished'
   roundNumber: number
@@ -74,7 +80,7 @@ export type RoomState = {
   legalCardIds: string[]
   roundHistory: { roundNumber: number; rows: RoundRow[] }[]
   individualRanking: { playerId: string; name: string; team: string | null; score: number; bags: number }[]
-  teamRanking: { team: string; score: number; grossScore: number; bags: number; totalBags: number; bid: number | null; tricks: number; captainId: string | null }[]
+  teamRanking: { team: string; score: number; grossScore: number; bags: number; totalBags: number; bid: number | null; estimateTotal: number; tricks: number; captainId: string | null }[]
   chatMessages: { id: string; playerId: string; playerName: string; team: string | null; message: string; timestamp: string }[]
 }
 

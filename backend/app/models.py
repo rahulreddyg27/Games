@@ -95,6 +95,11 @@ class GameRoom:
     team_bid_order: list[str] = field(default_factory=list)
     team_turn_index: int = 0
     bidding_stage: str = "estimates"
+    editable_bid_player_id: str | None = None
+    editable_team: str | None = None
+    bid_editing_player_id: str | None = None
+    bid_editing_kind: str | None = None
+    bid_edit_deadline: float | None = None
     chat_messages: list[dict] = field(default_factory=list)
     deck_count: int = 2
     players: list[Player] = field(default_factory=list)

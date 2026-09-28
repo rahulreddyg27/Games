@@ -327,6 +327,16 @@ table { width: 100%; border-collapse: collapse; background: #07150f; }th, td { p
 .team-bid-status > span { display: grid; padding: 9px 12px; border: 1px solid #28543a; border-radius: 10px; }
 .team-bid-status > span.locked { border-color: #9ddd52; }
 .team-bid-status small { color: #82998c; }
+.team-bid-status strong { color: #d6ff73; }
+.quick-bids .half-bid { min-width: 48px; }
+.confirm-actions { display: flex; gap: 8px; }
+.bid-waiting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bid-waiting-row .waiting { margin: 0; }
+.edit-bid-action { padding: 12px; border: 1px solid #8caf55; border-radius: 13px; background: rgba(127, 170, 67, .08); }
+.edit-bid-controls { display: flex; align-items: center; gap: 9px; }
+.bid-edit-paused { padding: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid #886d32; border-radius: 13px; background: rgba(136, 109, 50, .09); }
+.bid-edit-paused span { color: #b5aa8e; font-size: 12px; }
+.bid-edit-paused b { color: #d6ff73; font-variant-numeric: tabular-nums; font-size: 18px; }
 
 @media (min-width: 900px) {
   .game-shell.chat-is-open { width: min(1180px, calc(100% - 420px)); margin-left: max(16px, calc((100vw - 1580px) / 2)); margin-right: 404px; }
@@ -340,6 +350,9 @@ table { width: 100%; border-collapse: collapse; background: #07150f; }th, td { p
   .estimate-grid { display: flex; overflow-x: auto; }
   .estimate-grid > div { min-width: 140px; }
   .team-bid-action .bid-controls { width: 100%; }
+  .bid-waiting-row { align-items: stretch; flex-direction: column; }
+  .edit-bid-controls { align-items: stretch; flex-direction: column; }
+  .bid-edit-paused { align-items: flex-start; flex-direction: column; }
   .chat-panel { left: 8px; right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); width: auto; height: min(42dvh, 390px); border-radius: 16px; }
   .phase-bidding .chat-panel, .phase-playing .chat-panel { bottom: calc(164px + env(safe-area-inset-bottom)); }
   .chat-panel > header { padding: 11px 13px; }

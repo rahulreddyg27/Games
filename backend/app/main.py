@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import secrets
+import time
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -14,6 +16,10 @@ from .game_engine import (
     advance_bots,
     advance_bot_draws,
     advance_bot_cut,
+    bot_bid,
+    begin_bid_edit,
+    cancel_bid_edit,
+    clear_bid_edit,
     cut_deck,
     continue_after_trick,
     legal_card_ids,
@@ -24,6 +30,8 @@ from .game_engine import (
     start_card_draw,
     submit_bid,
     submit_team_bid,
+    update_bid,
+    update_team_bid,
     team_totals,
 )
 from .models import GameRoom
@@ -37,6 +45,10 @@ from .persistence import (
 from .store import store
 
 ADMIN_KEY = "Qwerty@123"
+BOT_BID_DELAY_SECONDS = 7
+EDIT_BID_SECONDS = 60
+bot_bid_tasks: dict[str, tuple[str, asyncio.Task]] = {}
+bid_edit_tasks: dict[str, tuple[str, asyncio.Task]] = {}
 
 
 @asynccontextmanager
@@ -97,6 +109,10 @@ async def remove_active_room(code: str, reason: str) -> bool:
             pass
     store.connections.pop(code, None)
     store.rooms.pop(code, None)
+    pending_bot_bid = bot_bid_tasks.pop(code, None)
+    if pending_bot_bid:
+        pending_bot_bid[1].cancel()
+    stop_bid_edit_timeout(code)
     return True
 
 
@@ -161,6 +177,12 @@ def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
         "teamsLocked": room.teams_locked,
         "biddingStage": room.bidding_stage,
         "teamBidOrder": room.team_bid_order,
+        "activeBiddingTeam": room.team_bid_order[room.team_turn_index] if room.mode == "teams" and room.phase == "bidding" and room.team_turn_index < len(room.team_bid_order) else None,
+        "editableBidPlayerId": room.editable_bid_player_id,
+        "editableTeam": room.editable_team,
+        "bidEditingPlayerId": room.bid_editing_player_id,
+        "bidEditingKind": room.bid_editing_kind,
+        "bidEditDeadline": room.bid_edit_deadline,
         "mode": room.mode,
         "phase": room.phase,
         "roundNumber": room.round_number,
@@ -204,6 +226,91 @@ async def broadcast(room: GameRoom) -> None:
             room.player_by_id(player_id).connected = False
         except KeyError:
             pass
+
+
+def current_bot_bidder(room: GameRoom) -> tuple[str, str] | None:
+    if room.phase != "bidding" or room.bid_editing_player_id is not None:
+        return None
+    if room.mode != "teams" or room.bidding_stage == "estimates":
+        player = room.player_by_seat(room.turn_seat)
+        return (f"estimate:{player.id}", player.id) if player.is_bot else None
+    if room.team_turn_index >= len(room.team_bid_order):
+        return None
+    team = room.team_bid_order[room.team_turn_index]
+    captain_id = room.team_captains[team]
+    captain = room.player_by_id(captain_id)
+    return (f"team:{team}:{captain_id}", captain_id) if captain.is_bot else None
+
+
+def schedule_bot_bid(room: GameRoom) -> None:
+    bidder = current_bot_bidder(room)
+    existing = bot_bid_tasks.get(room.code)
+    if bidder is None:
+        if existing:
+            existing[1].cancel()
+            bot_bid_tasks.pop(room.code, None)
+        return
+    fingerprint, player_id = bidder
+    if existing and existing[0] == fingerprint and not existing[1].done():
+        return
+    if existing:
+        existing[1].cancel()
+
+    async def submit_after_delay() -> None:
+        try:
+            await asyncio.sleep(BOT_BID_DELAY_SECONDS)
+            if store.rooms.get(room.code) is not room or current_bot_bidder(room) != (fingerprint, player_id):
+                return
+            if room.mode == "teams" and room.bidding_stage == "teams":
+                team = room.team_bid_order[room.team_turn_index]
+                estimate = sum(int(member.bid or 0) for member in room.players if member.team == team)
+                submit_team_bid(room, player_id, min(room.round_number, estimate))
+            else:
+                submit_bid(room, player_id, bot_bid(room, player_id))
+            advance_bots(room, allow_bidding=False)
+            current = bot_bid_tasks.get(room.code)
+            if current and current[1] is asyncio.current_task():
+                bot_bid_tasks.pop(room.code, None)
+            schedule_bot_bid(room)
+            await broadcast(room)
+        finally:
+            current = bot_bid_tasks.get(room.code)
+            if current and current[1] is asyncio.current_task():
+                bot_bid_tasks.pop(room.code, None)
+
+    room.message = f"{room.player_by_id(player_id).name} is choosing a bid…"
+    bot_bid_tasks[room.code] = (fingerprint, asyncio.create_task(submit_after_delay()))
+
+
+def start_bid_edit_timeout(room: GameRoom, player_id: str) -> None:
+    existing = bid_edit_tasks.pop(room.code, None)
+    if existing:
+        existing[1].cancel()
+    room.bid_edit_deadline = time.time() + EDIT_BID_SECONDS
+
+    async def expire_edit() -> None:
+        try:
+            await asyncio.sleep(EDIT_BID_SECONDS)
+            if store.rooms.get(room.code) is not room or room.bid_editing_player_id != player_id:
+                return
+            editor = room.player_by_id(player_id)
+            clear_bid_edit(room)
+            room.message = f"{editor.name}'s edit time expired. Their original bid was kept."
+            bid_edit_tasks.pop(room.code, None)
+            schedule_bot_bid(room)
+            await broadcast(room)
+        finally:
+            current = bid_edit_tasks.get(room.code)
+            if current and current[1] is asyncio.current_task():
+                bid_edit_tasks.pop(room.code, None)
+
+    bid_edit_tasks[room.code] = (player_id, asyncio.create_task(expire_edit()))
+
+
+def stop_bid_edit_timeout(room_code: str) -> None:
+    pending = bid_edit_tasks.pop(room_code, None)
+    if pending:
+        pending[1].cancel()
 
 
 @app.get("/health")
@@ -258,6 +365,10 @@ async def close_room(code: str, body: CloseRoomRequest) -> dict:
         await websocket.close(code=4400, reason="Game closed by host")
     store.connections.pop(code, None)
     store.rooms.pop(code, None)
+    pending_bot_bid = bot_bid_tasks.pop(code, None)
+    if pending_bot_bid:
+        pending_bot_bid[1].cancel()
+    stop_bid_edit_timeout(code)
     delete_completed_game(code)
     return {"closed": True}
 
@@ -356,6 +467,7 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
     await websocket.accept()
     store.connections[code][player_id] = websocket
     player.connected = True
+    schedule_bot_bid(room)
     await broadcast(room)
 
     try:
@@ -405,16 +517,30 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
                         raise GameRuleError("Only the host can confirm the player order")
                     start_game(room)
                     advance_bot_cut(room)
-                    advance_bots(room)
+                    advance_bots(room, allow_bidding=False)
                 elif action == "cut_deck":
                     cut_deck(room, player_id, int(payload.get("position")))
-                    advance_bots(room)
+                    advance_bots(room, allow_bidding=False)
                 elif action == "submit_bid":
-                    submit_bid(room, player_id, int(payload.get("bid")))
-                    advance_bots(room)
+                    submit_bid(room, player_id, float(payload.get("bid")))
+                    advance_bots(room, allow_bidding=False)
+                elif action == "begin_bid_edit":
+                    kind = begin_bid_edit(room, player_id)
+                    start_bid_edit_timeout(room, player_id)
+                    player_name = room.player_by_id(player_id).name
+                    room.message = f"{player_name} is correcting their {'team bid' if kind == 'team' else 'bid'} (60 seconds)"
+                elif action == "update_bid":
+                    update_bid(room, player_id, float(payload.get("bid")))
+                    stop_bid_edit_timeout(room.code)
                 elif action == "submit_team_bid":
                     submit_team_bid(room, player_id, int(payload.get("bid")))
-                    advance_bots(room)
+                    advance_bots(room, allow_bidding=False)
+                elif action == "update_team_bid":
+                    update_team_bid(room, player_id, int(payload.get("bid")))
+                    stop_bid_edit_timeout(room.code)
+                elif action == "cancel_bid_edit":
+                    cancel_bid_edit(room, player_id)
+                    stop_bid_edit_timeout(room.code)
                 elif action == "send_chat":
                     message = str(payload.get("message", "")).strip()
                     if not message:
@@ -429,23 +555,24 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
                     room.chat_messages = room.chat_messages[-100:]
                 elif action == "play_card":
                     play_card(room, player_id, str(payload.get("cardId")))
-                    advance_bots(room)
+                    advance_bots(room, allow_bidding=False)
                     if room.phase == "finished":
                         save_completed_game(room.code, serialize_room(room, None))
                 elif action == "continue_trick":
                     continue_after_trick(room)
-                    advance_bots(room)
+                    advance_bots(room, allow_bidding=False)
                 elif action == "next_round":
                     if player_id != room.host_player_id:
                         raise GameRuleError("Only the host can start the next round")
                     next_round(room)
                     advance_bot_cut(room)
-                    advance_bots(room)
+                    advance_bots(room, allow_bidding=False)
                 elif action == "ping":
                     await websocket.send_json({"type": "pong"})
                     continue
                 else:
                     raise GameRuleError("Unknown action")
+                schedule_bot_bid(room)
                 await broadcast(room)
             except (GameRuleError, ValueError, TypeError) as exc:
                 await websocket.send_json({"type": "error", "message": str(exc)})

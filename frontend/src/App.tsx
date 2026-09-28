@@ -13,7 +13,13 @@ function normalizeRoomState(state: RoomState): RoomState {
     ...state,
     biddingStage: state.biddingStage ?? 'estimates',
     teamBidOrder: Array.isArray(state.teamBidOrder) ? state.teamBidOrder : [],
-    teamRanking: Array.isArray(state.teamRanking) ? state.teamRanking : [],
+    activeBiddingTeam: state.activeBiddingTeam ?? null,
+    editableBidPlayerId: state.editableBidPlayerId ?? null,
+    editableTeam: state.editableTeam ?? null,
+    bidEditingPlayerId: state.bidEditingPlayerId ?? null,
+    bidEditingKind: state.bidEditingKind ?? null,
+    bidEditDeadline: state.bidEditDeadline ?? null,
+    teamRanking: Array.isArray(state.teamRanking) ? state.teamRanking.map((team) => ({ ...team, estimateTotal: team.estimateTotal ?? 0 })) : [],
     chatMessages: Array.isArray(state.chatMessages) ? state.chatMessages : [],
     players: (state.players ?? []).map((player) => ({
       ...player,
@@ -658,7 +664,7 @@ function PlayerRail({ state, playerId }: { state: RoomState; playerId: string })
           <div className="avatar">{p.name.slice(0, 1).toUpperCase()}</div>
           <div className="seat-info">
             <strong>{p.name}{p.id === playerId ? ' · You' : ''}</strong>
-            <span className="bid-won">{state.mode === 'teams' ? `Team ${p.team} · Estimate ${p.bidSubmitted ? p.bid : '—'} · Won ${p.tricks}` : `${p.bidSubmitted ? `Bid ${p.bid ?? '✓'}` : 'No bid'} · Won ${p.tricks}`}</span>
+            <span className="bid-won">{state.mode === 'teams' ? `Team ${p.team} · Est. ${p.bidSubmitted ? formatEstimate(Number(p.bid)) : '—'} · Final ${team?.bid ?? '—'} · Won ${p.tricks}` : `${p.bidSubmitted ? `Bid ${p.bid ?? '✓'}` : 'No bid'} · Won ${p.tricks}`}</span>
           </div>
           <div className="seat-score">{team?.score ?? p.totalScore}<small>{team?.bags ?? p.bags}b</small></div>
         </div>
@@ -713,40 +719,75 @@ function BidPanel({
   setBid: (v: number) => void
   send: (p: Record<string, unknown>) => void
 }) {
+  const [clock, setClock] = useState(() => Date.now())
+  const [confirmingTeamBid, setConfirmingTeamBid] = useState(false)
+  const canEditEstimate = state.biddingStage === 'estimates' && state.editableBidPlayerId === me.id
+  const isEditing = state.bidEditingPlayerId === me.id
+  const editor = state.players.find((player) => player.id === state.bidEditingPlayerId)
+  const editSecondsLeft = state.bidEditDeadline ? Math.max(0, Math.ceil((state.bidEditDeadline * 1000 - clock) / 1000)) : 60
+  useEffect(() => {
+    if (!state.bidEditingPlayerId || !state.bidEditDeadline) return
+    setClock(Date.now())
+    const timer = window.setInterval(() => setClock(Date.now()), 250)
+    return () => window.clearInterval(timer)
+  }, [state.bidEditingPlayerId, state.bidEditDeadline])
+  useEffect(() => setConfirmingTeamBid(false), [state.biddingStage, state.currentPlayerId, state.roundNumber])
+
   if (state.mode === 'teams') {
     const current = state.players.find((player) => player.id === state.currentPlayerId)
     const myTeam = state.teamRanking.find((team) => team.team === me.team)
     const currentTeam = state.teamRanking.find((team) => team.captainId === state.currentPlayerId && team.bid === null)
     const canAct = state.currentPlayerId === me.id
+    const canEditTeam = state.biddingStage === 'teams' && state.editableTeam === me.team && myTeam?.captainId === me.id
+    const editingValue = canEditTeam ? myTeam?.bid : me.bid
     return (
       <section className="team-bid-panel">
         <div className="team-bid-heading">
-          <div><strong>{state.biddingStage === 'estimates' ? 'Public player estimates' : 'Combined team bids'}</strong><span>{state.biddingStage === 'estimates' ? 'Each estimate is visible to the entire table.' : 'The permanent team captain locks one final bid.'}</span></div>
+          <div><strong>{state.biddingStage === 'estimates' ? `Team ${state.activeBiddingTeam} public estimates` : `Team ${state.activeBiddingTeam} combined bid`}</strong><span>{state.biddingStage === 'estimates' ? 'The active team estimates first; every estimate is visible to the table.' : 'The active team captain reviews the total and locks a whole-number final bid.'}</span></div>
           {state.biddingStage === 'teams' && myTeam && <b>Team {myTeam.team}: {myTeam.bid === null ? 'Not locked' : `${myTeam.bid} locked`}</b>}
         </div>
         <div className="estimate-grid">
-          {state.players.map((player) => <div key={player.id}><span>{player.name} · Team {player.team}</span><strong>{player.bidSubmitted ? player.bid : '—'}</strong></div>)}
+          {state.players.map((player) => <div key={player.id}><span>{player.name} · Team {player.team}</span><strong>{player.bidSubmitted ? formatEstimate(Number(player.bid)) : '—'}</strong></div>)}
         </div>
-        {state.biddingStage === 'teams' && (
-          <div className="team-bid-status">
-            {state.teamBidOrder.map((label) => {
-              const team = state.teamRanking.find((item) => item.team === label)
-              const captain = state.players.find((player) => player.id === team?.captainId)
-              return <span key={label} className={team?.bid !== null ? 'locked' : ''}>Team {label}: {team?.bid ?? '—'} <small>Captain {captain?.name ?? '—'}</small></span>
-            })}
+        <div className="team-bid-status">
+          {state.teamBidOrder.map((label) => {
+            const team = state.teamRanking.find((item) => item.team === label)
+            const captain = state.players.find((player) => player.id === team?.captainId)
+            return <span key={label} className={team?.bid !== null ? 'locked' : ''}><b>Team {label}</b><small>Estimate total: {formatEstimate(team?.estimateTotal ?? 0)}</small><strong>Final bid: {team?.bid ?? '—'}</strong><small>Captain: {captain?.name ?? '—'}</small></span>
+          })}
+        </div>
+        {isEditing && (canEditEstimate || canEditTeam) ? (
+          <div className="team-bid-action edit-bid-action">
+            <div><strong>Correct {canEditTeam ? `Team ${me.team}'s combined bid` : 'your public estimate'} · {formatCountdown(editSecondsLeft)}</strong><span>The next bidder is paused. Update or cancel before time expires.</span></div>
+            <div className="edit-bid-controls"><BidControls roundNumber={state.roundNumber} bid={bid} setBid={setBid} allowHalf={!canEditTeam} label="Update Bid" onSubmit={() => send({ action: canEditTeam ? 'update_team_bid' : 'update_bid', bid })} /><button className="secondary" onClick={() => send({ action: 'cancel_bid_edit' })}>Cancel</button></div>
           </div>
-        )}
-        {canAct ? (
+        ) : state.bidEditingPlayerId ? (
+          <div className="bid-edit-paused"><strong>{editor?.name ?? 'Previous player'} is correcting a bid</strong><span>Next bid unlocks in {formatCountdown(editSecondsLeft)} or when editing finishes.</span></div>
+        ) : canAct && state.biddingStage === 'teams' && confirmingTeamBid ? (
+          <div className="team-bid-action confirm-team-bid">
+            <div><strong>Confirm Team {me.team}'s final bid: {bid}</strong><span>Once the next team submits its first estimate, this bid cannot be changed.</span></div>
+            <div className="confirm-actions"><button className="secondary" onClick={() => setConfirmingTeamBid(false)}>Go Back</button><button className="primary" onClick={() => send({ action: 'submit_team_bid', bid })}>Confirm Final Bid</button></div>
+          </div>
+        ) : canAct ? (
           <div className="team-bid-action">
             <div><strong>{state.biddingStage === 'estimates' ? 'Your estimate' : `Final bid for Team ${me.team}`}</strong><span>{state.roundNumber} total tricks are available this round.</span></div>
-            <BidControls roundNumber={state.roundNumber} bid={bid} setBid={setBid} label={state.biddingStage === 'estimates' ? 'Lock Estimate' : 'Lock Team Bid'} onSubmit={() => send({ action: state.biddingStage === 'estimates' ? 'submit_bid' : 'submit_team_bid', bid })} />
+            <BidControls roundNumber={state.roundNumber} bid={bid} setBid={setBid} allowHalf={state.biddingStage === 'estimates'} label={state.biddingStage === 'estimates' ? 'Lock Estimate' : 'Review Team Bid'} onSubmit={() => state.biddingStage === 'estimates' ? send({ action: 'submit_bid', bid }) : setConfirmingTeamBid(true)} />
           </div>
-        ) : <p className="waiting">Waiting for {current?.name ?? (currentTeam ? `Team ${currentTeam.team}'s captain` : 'the next bidder')}.</p>}
+        ) : <div className="bid-waiting-row"><p className="waiting">Waiting for {current?.name ?? (currentTeam ? `Team ${currentTeam.team}'s captain` : 'the next bidder')}.</p>{(canEditEstimate || canEditTeam) && <button className="secondary" onClick={() => { setBid(Number(editingValue ?? 0)); send({ action: 'begin_bid_edit' }) }}>Edit your bid</button>}</div>}
       </section>
     )
   }
   if (me.bidSubmitted) {
-    return <section className="action-panel"><strong>Guess submitted ✓</strong><span>Waiting for the other players.</span></section>
+    if (canEditEstimate && isEditing) {
+      return <section className="action-panel edit-bid-action"><div><strong>Correct your Guess · {formatCountdown(editSecondsLeft)}</strong><span>The next bidder is paused until you update, cancel, or time expires.</span></div><div className="edit-bid-controls"><BidControls roundNumber={state.roundNumber} bid={bid} setBid={setBid} label="Update Guess" onSubmit={() => send({ action: 'update_bid', bid })} /><button className="secondary" onClick={() => send({ action: 'cancel_bid_edit' })}>Cancel</button></div></section>
+    }
+    if (state.bidEditingPlayerId) {
+      return <section className="action-panel bid-edit-paused"><div><strong>{editor?.name ?? 'Previous player'} is correcting their Guess</strong><span>Bidding resumes when editing finishes or the timer expires.</span></div><b>{formatCountdown(editSecondsLeft)}</b></section>
+    }
+    return <section className="action-panel"><div><strong>Guess submitted: {me.bid} ✓</strong><span>{canEditEstimate ? 'You can correct it until the next player submits.' : 'The next bid has been submitted, so this Guess is final.'}</span></div>{canEditEstimate && <button className="secondary" onClick={() => { setBid(Number(me.bid ?? 0)); send({ action: 'begin_bid_edit' }) }}>Edit Guess</button>}</section>
+  }
+  if (state.bidEditingPlayerId) {
+    return <section className="action-panel bid-edit-paused"><div><strong>{editor?.name ?? 'Previous player'} is correcting their Guess</strong><span>Your Lock Guess button will become available when editing finishes.</span></div><b>{formatCountdown(editSecondsLeft)}</b></section>
   }
   if (state.currentPlayerId !== me.id) {
     const current = state.players.find((player) => player.id === state.currentPlayerId)
@@ -763,9 +804,18 @@ function BidPanel({
   )
 }
 
-function BidControls({ roundNumber, bid, setBid, label, onSubmit }: { roundNumber: number; bid: number; setBid: (value: number) => void; label: string; onSubmit: () => void }) {
+function formatCountdown(seconds: number) {
+  const minutes = Math.floor(seconds / 60)
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+function formatEstimate(value: number) {
+  return Number.isInteger(value) ? `${value}` : `${Math.floor(value)}½`
+}
+
+function BidControls({ roundNumber, bid, setBid, label, onSubmit, allowHalf = false }: { roundNumber: number; bid: number; setBid: (value: number) => void; label: string; onSubmit: () => void; allowHalf?: boolean }) {
   return <div className="bid-controls">
-    <div className="quick-bids">{Array.from({ length: Math.min(roundNumber, 5) + 1 }, (_, i) => <button key={i} className={bid === i ? 'selected' : ''} onClick={() => setBid(i)}>{i}</button>)}</div>
+    <div className="quick-bids">{Array.from({ length: Math.min(roundNumber, 5) + 1 }, (_, i) => <button key={i} className={Math.floor(bid) === i ? 'selected' : ''} onClick={() => setBid(i + (allowHalf && bid % 1 ? .5 : 0))}>{i}</button>)}{allowHalf && <button className={bid % 1 ? 'selected half-bid' : 'half-bid'} disabled={Math.floor(bid) >= roundNumber} onClick={() => setBid(bid % 1 ? Math.floor(bid) : bid + .5)}>+½</button>}</div>
     {roundNumber > 5 && <select aria-label="Bids above 5" value={bid > 5 ? bid : ''} onChange={(event) => setBid(Number(event.target.value))}><option value="" disabled>6+</option>{Array.from({ length: roundNumber - 5 }, (_, i) => i + 6).map((value) => <option key={value} value={value}>{value}</option>)}</select>}
     <button className="primary" onClick={onSubmit}>{label}</button>
   </div>
@@ -835,22 +885,35 @@ function RoundComplete({ state, isHost, send }: { state: RoomState; isHost: bool
 }
 
 function FinalResults({ state }: { state: RoomState }) {
+  const teamTopScore = state.teamRanking[0]?.score
+  const tiedTeams = state.teamRanking.filter((team) => team.score === teamTopScore)
+  const individualTopScore = state.individualRanking[0]?.score
+  const tiedPlayers = state.individualRanking.filter((player) => player.score === individualTopScore)
+  const resultTitle = state.mode === 'teams'
+    ? tiedTeams.length > 1 ? `Game tied: ${tiedTeams.map((team) => `Team ${team.team}`).join(' & ')}` : `Team ${tiedTeams[0]?.team ?? '—'} wins!`
+    : tiedPlayers.length > 1 ? `Game tied: ${tiedPlayers.map((player) => player.name).join(' & ')}` : `${tiedPlayers[0]?.name ?? 'Winner'} wins!`
   return (
     <section className="final-results">
       <div className="trophy">🏆</div>
       <p className="eyebrow">GAME COMPLETE</p>
-      <h2>{state.mode === 'teams' && state.teamRanking.length ? `Team ${state.teamRanking[0].team} wins!` : `${state.individualRanking[0]?.name ?? 'Winner'} wins!`}</h2>
+      <h2>{resultTitle}</h2>
       {state.mode === 'teams' && (
         <div className="team-results">
-          {state.teamRanking.map((team, i) => <div key={team.team}><span>#{i + 1} Team {team.team}</span><strong>{team.score}</strong></div>)}
+          {state.teamRanking.map((team) => {
+            const rank = 1 + state.teamRanking.filter((other) => other.score > team.score).length
+            const tied = state.teamRanking.filter((other) => other.score === team.score).length > 1
+            return <div key={team.team}><span>#{rank} Team {team.team}{tied ? ' · TIED' : ''}</span><strong>{team.score}</strong></div>
+          })}
         </div>
       )}
       <div className="ranking">
         {state.mode === 'teams' ? state.players.slice().sort((a, b) => b.contributionTricks - a.contributionTricks).map((player, i) => (
           <div key={player.id}><span>#{i + 1}</span><strong>{player.name}</strong><em>Team {player.team}</em><b>{player.contributionTricks}</b><small>contribution tricks</small></div>
-        )) : state.individualRanking.map((p, i) => (
-          <div key={p.playerId}><span>#{i + 1}</span><strong>{p.name}</strong>{p.team && <em>Team {p.team}</em>}<b>{p.score}</b><small>{p.bags} bags</small></div>
-        ))}
+        )) : state.individualRanking.map((p) => {
+          const rank = 1 + state.individualRanking.filter((other) => other.score > p.score).length
+          const tied = state.individualRanking.filter((other) => other.score === p.score).length > 1
+          return <div key={p.playerId}><span>#{rank}{tied ? ' · TIED' : ''}</span><strong>{p.name}</strong>{p.team && <em>Team {p.team}</em>}<b>{p.score}</b><small>{p.bags} bags</small></div>
+        })}
       </div>
     </section>
   )
