@@ -20,6 +20,7 @@ from .game_engine import (
     begin_bid_edit,
     cancel_bid_edit,
     clear_bid_edit,
+    confirm_final_bid_and_start,
     cut_deck,
     continue_after_trick,
     legal_card_ids,
@@ -47,8 +48,10 @@ from .store import store
 ADMIN_KEY = "Qwerty@123"
 BOT_BID_DELAY_SECONDS = 7
 EDIT_BID_SECONDS = 60
+FINAL_BID_REVIEW_SECONDS = 30
 bot_bid_tasks: dict[str, tuple[str, asyncio.Task]] = {}
 bid_edit_tasks: dict[str, tuple[str, asyncio.Task]] = {}
+final_bid_review_tasks: dict[str, tuple[str, asyncio.Task]] = {}
 
 
 @asynccontextmanager
@@ -113,12 +116,13 @@ async def remove_active_room(code: str, reason: str) -> bool:
     if pending_bot_bid:
         pending_bot_bid[1].cancel()
     stop_bid_edit_timeout(code)
+    stop_final_bid_review(code)
     return True
 
 
 def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
     current_player = None
-    if room.players and room.phase in ("bidding", "playing"):
+    if room.players and room.phase in ("bidding", "bid_review", "playing"):
         if room.phase == "bidding" and room.mode == "teams" and room.bidding_stage == "teams" and room.team_turn_index < len(room.team_bid_order):
             current_player = room.team_captains.get(room.team_bid_order[room.team_turn_index])
         else:
@@ -183,6 +187,9 @@ def serialize_room(room: GameRoom, viewer_id: str | None = None) -> dict:
         "bidEditingPlayerId": room.bid_editing_player_id,
         "bidEditingKind": room.bid_editing_kind,
         "bidEditDeadline": room.bid_edit_deadline,
+        "bidEditRemainingSeconds": room.bid_edit_remaining_seconds.get(viewer_id, EDIT_BID_SECONDS),
+        "finalBidReviewPlayerId": room.final_bid_review_player_id,
+        "finalBidReviewDeadline": room.final_bid_review_deadline,
         "mode": room.mode,
         "phase": room.phase,
         "roundNumber": room.round_number,
@@ -230,6 +237,8 @@ async def broadcast(room: GameRoom) -> None:
 
 def current_bot_bidder(room: GameRoom) -> tuple[str, str] | None:
     if room.phase != "bidding" or room.bid_editing_player_id is not None:
+        return None
+    if room.final_bid_review_player_id is not None:
         return None
     if room.mode != "teams" or room.bidding_stage == "estimates":
         player = room.player_by_seat(room.turn_seat)
@@ -286,14 +295,15 @@ def start_bid_edit_timeout(room: GameRoom, player_id: str) -> None:
     existing = bid_edit_tasks.pop(room.code, None)
     if existing:
         existing[1].cancel()
-    room.bid_edit_deadline = time.time() + EDIT_BID_SECONDS
+    remaining = max(0.0, (room.bid_edit_deadline or time.time()) - time.time())
 
     async def expire_edit() -> None:
         try:
-            await asyncio.sleep(EDIT_BID_SECONDS)
+            await asyncio.sleep(remaining)
             if store.rooms.get(room.code) is not room or room.bid_editing_player_id != player_id:
                 return
             editor = room.player_by_id(player_id)
+            room.bid_edit_remaining_seconds[player_id] = 0.0
             clear_bid_edit(room)
             room.message = f"{editor.name}'s edit time expired. Their original bid was kept."
             bid_edit_tasks.pop(room.code, None)
@@ -309,6 +319,41 @@ def start_bid_edit_timeout(room: GameRoom, player_id: str) -> None:
 
 def stop_bid_edit_timeout(room_code: str) -> None:
     pending = bid_edit_tasks.pop(room_code, None)
+    if pending:
+        pending[1].cancel()
+
+
+def schedule_final_bid_review(room: GameRoom) -> None:
+    player_id = room.final_bid_review_player_id
+    if player_id is None or room.phase != "bid_review":
+        stop_final_bid_review(room.code)
+        return
+    existing = final_bid_review_tasks.get(room.code)
+    if existing and existing[0] == player_id and not existing[1].done():
+        return
+    if existing:
+        existing[1].cancel()
+    room.final_bid_review_deadline = time.time() + FINAL_BID_REVIEW_SECONDS
+
+    async def start_after_review() -> None:
+        try:
+            await asyncio.sleep(FINAL_BID_REVIEW_SECONDS)
+            if store.rooms.get(room.code) is not room or room.final_bid_review_player_id != player_id:
+                return
+            stop_bid_edit_timeout(room.code)
+            confirm_final_bid_and_start(room, player_id)
+            final_bid_review_tasks.pop(room.code, None)
+            await broadcast(room)
+        finally:
+            current = final_bid_review_tasks.get(room.code)
+            if current and current[1] is asyncio.current_task():
+                final_bid_review_tasks.pop(room.code, None)
+
+    final_bid_review_tasks[room.code] = (player_id, asyncio.create_task(start_after_review()))
+
+
+def stop_final_bid_review(room_code: str) -> None:
+    pending = final_bid_review_tasks.pop(room_code, None)
     if pending:
         pending[1].cancel()
 
@@ -541,6 +586,10 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
                 elif action == "cancel_bid_edit":
                     cancel_bid_edit(room, player_id)
                     stop_bid_edit_timeout(room.code)
+                elif action == "confirm_final_bid_and_start":
+                    confirm_final_bid_and_start(room, player_id)
+                    stop_bid_edit_timeout(room.code)
+                    stop_final_bid_review(room.code)
                 elif action == "send_chat":
                     message = str(payload.get("message", "")).strip()
                     if not message:
@@ -573,6 +622,7 @@ async def room_socket(websocket: WebSocket, code: str, player_id: str) -> None:
                 else:
                     raise GameRuleError("Unknown action")
                 schedule_bot_bid(room)
+                schedule_final_bid_review(room)
                 await broadcast(room)
             except (GameRuleError, ValueError, TypeError) as exc:
                 await websocket.send_json({"type": "error", "message": str(exc)})

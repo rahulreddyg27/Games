@@ -19,6 +19,9 @@ function normalizeRoomState(state: RoomState): RoomState {
     bidEditingPlayerId: state.bidEditingPlayerId ?? null,
     bidEditingKind: state.bidEditingKind ?? null,
     bidEditDeadline: state.bidEditDeadline ?? null,
+    bidEditRemainingSeconds: state.bidEditRemainingSeconds ?? 60,
+    finalBidReviewPlayerId: state.finalBidReviewPlayerId ?? null,
+    finalBidReviewDeadline: state.finalBidReviewDeadline ?? null,
     teamRanking: Array.isArray(state.teamRanking) ? state.teamRanking.map((team) => ({ ...team, estimateTotal: team.estimateTotal ?? 0 })) : [],
     chatMessages: Array.isArray(state.chatMessages) ? state.chatMessages : [],
     players: (state.players ?? []).map((player) => ({
@@ -481,11 +484,11 @@ function Game({
             <GameTable state={state} playerId={playerId} send={send} />
           </section>
 
-          {state.phase === 'bidding' && (
+          {(state.phase === 'bidding' || state.phase === 'bid_review') && (
             <BidPanel state={state} me={me} bid={bid} setBid={setBid} send={send} />
           )}
 
-          {(state.phase === 'bidding' || state.phase === 'playing') && (
+          {(state.phase === 'bidding' || state.phase === 'bid_review' || state.phase === 'playing') && (
             <Hand state={state} playerId={playerId} send={send} />
           )}
 
@@ -724,13 +727,15 @@ function BidPanel({
   const canEditEstimate = state.biddingStage === 'estimates' && state.editableBidPlayerId === me.id
   const isEditing = state.bidEditingPlayerId === me.id
   const editor = state.players.find((player) => player.id === state.bidEditingPlayerId)
-  const editSecondsLeft = state.bidEditDeadline ? Math.max(0, Math.ceil((state.bidEditDeadline * 1000 - clock) / 1000)) : 60
+  const editSecondsLeft = state.bidEditDeadline ? Math.max(0, Math.ceil((state.bidEditDeadline * 1000 - clock) / 1000)) : Math.max(0, Math.ceil(state.bidEditRemainingSeconds))
+  const finalReviewSecondsLeft = state.finalBidReviewDeadline ? Math.max(0, Math.ceil((state.finalBidReviewDeadline * 1000 - clock) / 1000)) : 30
+  const hasEditTime = state.bidEditRemainingSeconds > 0
   useEffect(() => {
-    if (!state.bidEditingPlayerId || !state.bidEditDeadline) return
+    if ((!state.bidEditingPlayerId || !state.bidEditDeadline) && !state.finalBidReviewDeadline) return
     setClock(Date.now())
     const timer = window.setInterval(() => setClock(Date.now()), 250)
     return () => window.clearInterval(timer)
-  }, [state.bidEditingPlayerId, state.bidEditDeadline])
+  }, [state.bidEditingPlayerId, state.bidEditDeadline, state.finalBidReviewDeadline])
   useEffect(() => setConfirmingTeamBid(false), [state.biddingStage, state.currentPlayerId, state.roundNumber])
 
   if (state.mode === 'teams') {
@@ -773,7 +778,7 @@ function BidPanel({
             <div><strong>{state.biddingStage === 'estimates' ? 'Your estimate' : `Final bid for Team ${me.team}`}</strong><span>{state.roundNumber} total tricks are available this round.</span></div>
             <BidControls roundNumber={state.roundNumber} bid={bid} setBid={setBid} allowHalf={state.biddingStage === 'estimates'} label={state.biddingStage === 'estimates' ? 'Lock Estimate' : 'Review Team Bid'} onSubmit={() => state.biddingStage === 'estimates' ? send({ action: 'submit_bid', bid }) : setConfirmingTeamBid(true)} />
           </div>
-        ) : <div className="bid-waiting-row"><p className="waiting">Waiting for {current?.name ?? (currentTeam ? `Team ${currentTeam.team}'s captain` : 'the next bidder')}.</p>{(canEditEstimate || canEditTeam) && <button className="secondary" onClick={() => { setBid(Number(editingValue ?? 0)); send({ action: 'begin_bid_edit' }) }}>Edit your bid</button>}</div>}
+        ) : <div className="bid-waiting-row"><p className="waiting">Waiting for {current?.name ?? (currentTeam ? `Team ${currentTeam.team}'s captain` : 'the next bidder')}.</p>{(canEditEstimate || canEditTeam) && hasEditTime && <button className="secondary" onClick={() => { setBid(Number(editingValue ?? 0)); send({ action: 'begin_bid_edit' }) }}>Edit your bid ({formatCountdown(editSecondsLeft)} left)</button>}</div>}
       </section>
     )
   }
@@ -784,7 +789,10 @@ function BidPanel({
     if (state.bidEditingPlayerId) {
       return <section className="action-panel bid-edit-paused"><div><strong>{editor?.name ?? 'Previous player'} is correcting their Guess</strong><span>Bidding resumes when editing finishes or the timer expires.</span></div><b>{formatCountdown(editSecondsLeft)}</b></section>
     }
-    return <section className="action-panel"><div><strong>Guess submitted: {me.bid} ✓</strong><span>{canEditEstimate ? 'You can correct it until the next player submits.' : 'The next bid has been submitted, so this Guess is final.'}</span></div>{canEditEstimate && <button className="secondary" onClick={() => { setBid(Number(me.bid ?? 0)); send({ action: 'begin_bid_edit' }) }}>Edit Guess</button>}</section>
+    if (state.finalBidReviewPlayerId === me.id) {
+      return <section className="action-panel final-bid-review"><div><strong>Final Guess submitted: {me.bid} ✓</strong><span>Review your Guess or start the round. The game starts automatically in {formatCountdown(finalReviewSecondsLeft)}.</span></div><div className="edit-bid-controls">{canEditEstimate && hasEditTime && <button className="secondary" onClick={() => { setBid(Number(me.bid ?? 0)); send({ action: 'begin_bid_edit' }) }}>Edit Guess</button>}<button className="primary" onClick={() => send({ action: 'confirm_final_bid_and_start' })}>Confirm and Start</button></div></section>
+    }
+    return <section className="action-panel"><div><strong>Guess submitted: {me.bid} ✓</strong><span>{canEditEstimate ? (hasEditTime ? 'You can correct it until the next player submits.' : 'Your one-minute editing allowance is used for this round.') : 'The next bid has been submitted, so this Guess is final.'}</span></div>{canEditEstimate && hasEditTime && <button className="secondary" onClick={() => { setBid(Number(me.bid ?? 0)); send({ action: 'begin_bid_edit' }) }}>Edit Guess ({formatCountdown(editSecondsLeft)} left)</button>}</section>
   }
   if (state.bidEditingPlayerId) {
     return <section className="action-panel bid-edit-paused"><div><strong>{editor?.name ?? 'Previous player'} is correcting their Guess</strong><span>Your Lock Guess button will become available when editing finishes.</span></div><b>{formatCountdown(editSecondsLeft)}</b></section>
